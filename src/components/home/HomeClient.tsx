@@ -1,0 +1,141 @@
+"use client";
+
+import { useAuth } from "@/components/AuthProvider";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useTransition } from "react";
+import TaskList from "@/components/tasks/TaskList";
+import { format } from "date-fns";
+import { TasksPageHeader } from "@/components/tasks/TasksPageHeader";
+import { useUiStore } from "@/lib/store/uiStore";
+import { useTaskActions } from "@/components/TaskActionsProvider";
+import { PlusIcon, Loader2 } from "lucide-react";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { PwaInstallHint } from "@/components/home/PwaInstallHint";
+import { StartHereCard } from "@/components/home/StartHereCard";
+import type { SortOption, GroupOption } from "@/lib/types/sorting";
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+export function HomeClient() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const sortBy = useUiStore((state) => state.sortBy);
+  const groupBy = useUiStore((state) => state.groupBy);
+  const viewMode = useUiStore((state) => state.viewMode);
+  const setSortBy = useUiStore((state) => state.setSortBy);
+  const setGroupBy = useUiStore((state) => state.setGroupBy);
+  const setViewMode = useUiStore((state) => state.setViewMode);
+  const { openAddTask } = useTaskActions();
+  const { trigger } = useHaptic();
+
+  const [isTaskListPending, startTransition] = useTransition();
+
+  const handleSortChange = (sort: SortOption) => {
+    startTransition(() => {
+      setSortBy(sort);
+    });
+  };
+
+  const handleGroupChange = (group: GroupOption) => {
+    startTransition(() => {
+      setGroupBy(group);
+    });
+  };
+
+  const currentProjectId = searchParams.get("project") || "all";
+  const filter = searchParams.get("filter") || undefined;
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/login");
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2
+          className="h-6 w-6 text-muted-foreground animate-spin"
+          strokeWidth={2.25}
+        />
+        <span className="sr-only">Loading...</span>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  const today = new Date();
+  const greeting = getGreeting();
+
+  return (
+    <div className="flex flex-col h-[var(--mobile-page-height)] md:h-[calc(100dvh-16px)] overflow-hidden">
+      <PwaInstallHint />
+
+      <div className="px-4 md:px-6 pt-4 pb-4 flex flex-col md:flex-row md:items-start justify-between gap-4 md:gap-0">
+        <div>
+          <p className="text-sm text-muted-foreground flex items-center gap-2">
+            {format(today, "EEEE, MMMM d")}
+            {filter && (
+              <span className="flex items-center gap-1.5 before:content-['•'] before:text-muted-foreground">
+                <span className="capitalize text-primary font-medium">
+                  {filter === "p1" ? "High Priority" : filter}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    trigger("toggle");
+                    router.push("/");
+                  }}
+                  className="bg-secondary/40 hover:bg-secondary/60 border border-border/50 p-0.5 rounded-full transition-colors"
+                  title="Clear filter"
+                  aria-label="Clear filter"
+                >
+                  <PlusIcon
+                    className="h-3.5 w-3.5 rotate-45"
+                    strokeWidth={2.25}
+                  />
+                </button>
+              </span>
+            )}
+          </p>
+          <h1 className="type-h1 mt-1 text-primary">{greeting}</h1>
+        </div>
+
+        <div className="flex w-full md:min-w-0 md:flex-1 md:justify-end">
+          <TasksPageHeader
+            currentSort={sortBy}
+            currentGroup={groupBy}
+            viewMode={viewMode}
+            onSortChange={handleSortChange}
+            onGroupChange={handleGroupChange}
+            onViewModeChange={setViewMode}
+            onNewTask={openAddTask}
+          />
+        </div>
+      </div>
+
+      <StartHereCard />
+
+      <div
+        className="flex-1 min-h-0 transition-opacity duration-150"
+        style={{ opacity: isTaskListPending ? 0.6 : 1 }}
+      >
+        <TaskList
+          sortBy={sortBy}
+          groupBy={groupBy}
+          projectId={currentProjectId}
+          filter={filter}
+        />
+      </div>
+    </div>
+  );
+}

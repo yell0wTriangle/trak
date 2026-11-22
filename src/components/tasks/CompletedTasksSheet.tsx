@@ -1,0 +1,306 @@
+"use client";
+
+import React, { useState } from "react";
+import { useTasks } from "@/lib/hooks/useTasks";
+import { format, isToday, isYesterday, parseISO } from "date-fns";
+import { CheckCircle2, Clock, Trash2, Search, X } from "lucide-react";
+import { Virtuoso } from "react-virtuoso";
+
+import type { Task } from "@/lib/types/task";
+import { buildLogbookItems, type LogbookItem } from "./logbookItems";
+import { useTimeFormat } from "@/lib/hooks/useTimeFormat";
+import {
+  useUpdateTask,
+  useClearCompletedTasks,
+} from "@/lib/hooks/useTaskMutations";
+import {
+  ResponsiveDialog,
+  ResponsiveDialogClose,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogTitle,
+  useIsDrawer,
+} from "@/components/ui/responsive-dialog";
+import { Button } from "@/components/ui/button";
+import { DeleteConfirmationDialog } from "@/components/ui/DeleteConfirmationDialog";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { ReadableText } from "@/components/encryption/ReadableText";
+
+interface CompletedTasksSheetProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+// Optimized individual item to prevent re-renders of the whole list
+const CompletedTaskItem = React.memo(({ task }: { task: Task }) => {
+  const updateMutation = useUpdateTask();
+  const { trigger } = useHaptic();
+
+  const handleUncomplete = () => {
+    trigger("toggle");
+    updateMutation.mutate({ id: task.id, is_completed: false });
+  };
+
+  const { formatTime } = useTimeFormat();
+
+  const completedDate = task.completed_at ? parseISO(task.completed_at) : null;
+
+  // Older rows need the day, not just the time.
+  const formattedDate = !completedDate
+    ? ""
+    : isToday(completedDate) || isYesterday(completedDate)
+      ? formatTime(completedDate)
+      : `${format(completedDate, "MMM d")} · ${formatTime(completedDate)}`;
+
+  return (
+    <div className="flex items-start gap-3 py-2 px-4 mx-2 rounded-md hover:bg-muted/40 transition-seijaku-fast group min-h-[44px]">
+      <button onClick={handleUncomplete} aria-label="Mark task incomplete">
+        <CheckCircle2
+          className="h-5 w-5 text-foreground/50 hover:text-foreground transition-seijaku-fast"
+          strokeWidth={2.25}
+        />
+      </button>
+
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium leading-tight line-through text-muted-foreground">
+          <ReadableText text={task.content} />
+        </p>
+        {completedDate && (
+          <div className="flex items-center gap-1 mt-1 text-xs text-foreground/60 font-medium">
+            <Clock className="h-3 w-3" strokeWidth={2.25} />
+            {formattedDate}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+CompletedTaskItem.displayName = "CompletedTaskItem";
+
+export function CompletedTasksSheet({
+  open,
+  onOpenChange,
+}: CompletedTasksSheetProps) {
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const clearMutation = useClearCompletedTasks();
+
+  const handleClearHistory = () => {
+    setShowClearDialog(false);
+    onOpenChange(false);
+    clearMutation.mutate();
+  };
+
+  return (
+    <>
+      <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+        <CompletedTasksSheetBody
+          onRequestClearHistory={() => setShowClearDialog(true)}
+        />
+      </ResponsiveDialog>
+
+      <DeleteConfirmationDialog
+        isOpen={showClearDialog}
+        onClose={() => setShowClearDialog(false)}
+        onConfirm={handleClearHistory}
+        title="Clear History"
+        description="Are you sure you want to delete all completed tasks? This action cannot be undone and will remove these tasks from your statistics."
+      />
+    </>
+  );
+}
+
+function CompletedTasksSheetBody({
+  onRequestClearHistory,
+}: {
+  onRequestClearHistory: () => void;
+}) {
+  const { data: tasks = [], isLoading } = useTasks({ showCompleted: true });
+  const isMobile = useIsDrawer();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showOlder, setShowOlder] = useState(false);
+  const { trigger } = useHaptic();
+
+  const completedTasks = tasks.filter(
+    (task) =>
+      task.is_completed &&
+      task.completed_at &&
+      !isToday(parseISO(task.completed_at)),
+  );
+
+  const filteredCompletedTasks = completedTasks.filter((task) =>
+    (task.content ?? "").toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
+  const isSearching = searchQuery.length > 0;
+  const flattenedItems = buildLogbookItems(filteredCompletedTasks, {
+    showOlder: showOlder || isSearching,
+  });
+
+  const hasResults = flattenedItems.length > 0;
+
+  const renderItem = (_index: number, item: LogbookItem) => {
+    if (item.type === "more") {
+      return (
+        <button
+          type="button"
+          onClick={() => setShowOlder(true)}
+          className="type-ui w-full px-6 py-4 text-muted-foreground hover:bg-secondary/30 hover:text-foreground transition-seijaku-fast"
+        >
+          Show older ({item.count})
+        </button>
+      );
+    }
+    if (item.type === "header") {
+      return (
+        <h3 className="type-micro font-semibold uppercase px-6 py-2.5 text-muted-foreground bg-background sticky top-0 z-10">
+          {item.title}
+        </h3>
+      );
+    }
+    return <CompletedTaskItem task={item.task} />;
+  };
+
+  const content = (
+    <div className="flex-1 flex flex-col min-h-0 h-full overflow-hidden">
+      {isLoading ? (
+        <div className="p-4 space-y-3" data-testid="completed-tasks-skeleton">
+          {[1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 p-3 rounded-xl border border-border/40 bg-secondary/10"
+            >
+              <Skeleton className="h-4 w-4 rounded-sm shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-3/4 rounded" />
+                <Skeleton className="h-3 w-1/4 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : completedTasks.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center p-4">
+          <EmptyState
+            icon={CheckCircle2}
+            title="No Completed Tasks"
+            description="Tasks you complete will appear here. Start checking off items from your task list!"
+            className="py-12"
+          />
+        </div>
+      ) : !hasResults && isSearching ? (
+        <div className="flex-1 flex items-center justify-center p-4">
+          <EmptyState
+            icon={Search}
+            title="No tasks found"
+            description="Try searching for something else"
+            className="py-12"
+          />
+        </div>
+      ) : (
+        <Virtuoso
+          style={{ height: "100%", width: "100%" }}
+          data={flattenedItems}
+          itemContent={renderItem}
+          className="scrollbar-hide"
+          computeItemKey={(_index, item) => item.id}
+          initialTopMostItemIndex={0}
+          overscan={200}
+        />
+      )}
+    </div>
+  );
+
+  return (
+    <ResponsiveDialogContent
+      showClose={false}
+      className={
+        isMobile
+          ? "max-h-[92dvh] h-[92dvh] flex flex-col overflow-hidden"
+          : "max-w-lg h-[80vh] flex flex-col p-0 overflow-hidden border-border bg-background"
+      }
+    >
+      <div className="flex flex-row items-center justify-between border-b border-border/50 px-6 py-4 shrink-0">
+        <ResponsiveDialogTitle className="flex items-center gap-2 cursor-default">
+          <CheckCircle2
+            className="h-5 w-5 sm:h-4 sm:w-4 text-foreground/70"
+            strokeWidth={2.25}
+          />
+          <span className="type-h2">Logbook</span>
+        </ResponsiveDialogTitle>
+        <ResponsiveDialogDescription className="sr-only">
+          View and manage your completed task history.
+        </ResponsiveDialogDescription>
+        <div className="flex items-center gap-3">
+          {completedTasks.length > 0 &&
+            (isMobile ? (
+              <Button
+                variant="destructive"
+                size="icon"
+                aria-label="Clear history"
+                className="h-10 w-10 active:scale-95 transition-seijaku-fast rounded-md shadow-none"
+                onClick={() => {
+                  trigger("thud");
+                  onRequestClearHistory();
+                }}
+              >
+                <Trash2 className="h-5 w-5" strokeWidth={2.25} />
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  trigger("thud");
+                  onRequestClearHistory();
+                }}
+                className="h-8 gap-2 rounded-sm shadow-none font-medium px-3"
+              >
+                <Trash2 className="h-3.5 w-3.5" strokeWidth={2.25} />
+                <span className="text-xs">Clear History</span>
+              </Button>
+            ))}
+          <ResponsiveDialogClose asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Close"
+              title={isMobile ? undefined : "Close"}
+              className={
+                isMobile
+                  ? "h-10 w-10 text-muted-foreground active:scale-95 transition-seijaku-fast"
+                  : "h-10 w-10 text-muted-foreground hover:text-foreground transition-seijaku-fast rounded-sm"
+              }
+            >
+              <X
+                className={isMobile ? "h-6 w-6" : "h-4 w-4"}
+                strokeWidth={2.25}
+              />
+            </Button>
+          </ResponsiveDialogClose>
+        </div>
+      </div>
+
+      {completedTasks.length > 0 && (
+        <div className="px-6 py-4 sm:py-3 border-b border-border/40 bg-secondary/5 shrink-0">
+          <div className="relative group">
+            <Search
+              className="absolute left-3.5 sm:left-3 top-1/2 -translate-y-1/2 h-5 w-5 sm:h-4 sm:w-4 text-muted-foreground sm:group-focus-within:text-brand transition-colors"
+              strokeWidth={2.25}
+            />
+            <Input
+              className="pl-11 sm:pl-9 bg-secondary/20 h-12 sm:h-9 text-base sm:text-sm shadow-none border-border/30 sm:border-border/40 focus:border-border/60 focus:bg-secondary/30 rounded-xl sm:rounded-md transition-all placeholder:text-muted-foreground"
+              placeholder="Search completed tasks..."
+              aria-label="Search completed tasks"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+      <div className="flex-1 overflow-hidden">{content}</div>
+    </ResponsiveDialogContent>
+  );
+}

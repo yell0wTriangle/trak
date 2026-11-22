@@ -1,0 +1,227 @@
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { HabitView } from "@/components/habits/HabitView";
+
+const mockIsGuestMode = vi.fn(() => false);
+vi.mock("@/components/AuthProvider", () => ({
+  useAuth: () => ({ isGuestMode: mockIsGuestMode() }),
+  useOptionalAuth: () => ({ isGuestMode: mockIsGuestMode() }),
+}));
+
+vi.mock("@/lib/hooks/useHaptic", () => ({
+  useHaptic: () => ({ trigger: vi.fn() }),
+}));
+
+vi.mock("@/components/ui/responsive-dialog", () => ({
+  useIsDrawer: () => false,
+  ResponsiveDialogHeader: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  ResponsiveDialogTitle: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  ResponsiveDialogDescription: ({
+    children,
+  }: {
+    children: React.ReactNode;
+  }) => <div>{children}</div>,
+}));
+
+vi.mock("@/components/shared/ColorPicker", () => ({
+  ColorPicker: () => <div data-testid="color-picker" />,
+}));
+
+vi.mock("@/components/habits/shared/HabitIconPicker", () => ({
+  HabitIconPicker: () => <div data-testid="icon-picker" />,
+  getHabitIcon: () => () => null,
+}));
+
+describe("HabitView", () => {
+  const baseProps = {
+    name: "Test",
+    setName: vi.fn(),
+    description: "",
+    setDescription: vi.fn(),
+    color: "#ff0000",
+    setColor: vi.fn(),
+    icon: "Flame",
+    setIcon: vi.fn(),
+    frequencyCount: 1,
+    setFrequencyCount: vi.fn(),
+    frequencyPeriod: "day" as const,
+    setFrequencyPeriod: vi.fn(),
+    frequencyDays: undefined,
+    setFrequencyDays: vi.fn(),
+    targetValue: undefined,
+    setTargetValue: vi.fn(),
+    targetType: "at_least" as const,
+    setTargetType: vi.fn(),
+    unit: "",
+    setUnit: vi.fn(),
+    question: "",
+    setQuestion: vi.fn(),
+    reminderTime: null,
+    setReminderTime: vi.fn(),
+    reminderDays: 127,
+    setReminderDays: vi.fn(),
+    habitType: "boolean" as const,
+    setHabitType: vi.fn(),
+    hasContent: true,
+    isPending: false,
+    onSubmit: vi.fn(),
+    onKeyDown: vi.fn(),
+    mode: "create" as const,
+  };
+
+  it("renders header badge HABIT-NEW in create mode and HABIT-XXXX in edit mode", () => {
+    const { rerender } = render(<HabitView {...baseProps} mode="create" />);
+    expect(screen.getByTestId("habit-header-badge")).toHaveTextContent(
+      "HABIT-NEW",
+    );
+
+    rerender(
+      <HabitView
+        {...baseProps}
+        mode="edit"
+        habitId="habit-abcd-1234"
+        onArchive={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("habit-header-badge")).toHaveTextContent(
+      "HABIT-ABCD",
+    );
+  });
+
+  it("renders the property strip containing SlidersHorizontal and property controls", () => {
+    render(<HabitView {...baseProps} />);
+    expect(screen.getByTestId("property-strip")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Customize habit icon and color"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Yes or No" })).toBeInTheDocument();
+    expect(screen.getByText("Daily")).toBeInTheDocument();
+  });
+
+  it("does not render the target field for a boolean habit", () => {
+    render(
+      <HabitView {...baseProps} habitType="boolean" setHabitType={vi.fn()} />,
+    );
+    expect(screen.queryByLabelText("Target value")).not.toBeInTheDocument();
+  });
+
+  it("renders the target field once switched to measurable", () => {
+    const setHabitType = vi.fn();
+    render(
+      <HabitView
+        {...baseProps}
+        habitType="boolean"
+        setHabitType={setHabitType}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Measurable" }));
+    expect(setHabitType).toHaveBeenCalledWith("measurable");
+  });
+
+  it("shows the target field when habitType is already measurable", () => {
+    render(
+      <HabitView
+        {...baseProps}
+        habitType="measurable"
+        setHabitType={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Target value")).toBeInTheDocument();
+  });
+
+  it("adapts the question placeholder to the habit type", () => {
+    const { rerender } = render(
+      <HabitView {...baseProps} habitType="boolean" setHabitType={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByText("More options"));
+    expect(
+      screen.getByPlaceholderText("Did you wake up early today?"),
+    ).toBeInTheDocument();
+
+    rerender(
+      <HabitView
+        {...baseProps}
+        habitType="measurable"
+        setHabitType={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByPlaceholderText("How many pages did you read?"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps question and reminder behind More options, with details directly accessible", () => {
+    render(
+      <HabitView
+        {...baseProps}
+        mode="create"
+        habitType="boolean"
+        setHabitType={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText("Habit question")).toBeNull();
+    expect(screen.getByLabelText("Habit details")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("More options"));
+    expect(screen.getByLabelText("Habit question")).toBeInTheDocument();
+    expect(screen.getByText("Off")).toBeInTheDocument();
+  });
+
+  it("summarises what is set while More options is collapsed", () => {
+    mockIsGuestMode.mockReturnValue(false);
+    render(
+      <HabitView
+        {...baseProps}
+        mode="create"
+        habitType="boolean"
+        setHabitType={vi.fn()}
+        question="Did you run?"
+        reminderTime="09:00"
+        description=""
+      />,
+    );
+    expect(screen.getByText("Question · Reminder")).toBeInTheDocument();
+  });
+
+  it("shows needs account in summary for guest users with a reminder set", () => {
+    mockIsGuestMode.mockReturnValue(true);
+    render(
+      <HabitView
+        {...baseProps}
+        mode="create"
+        habitType="boolean"
+        setHabitType={vi.fn()}
+        question="Did you run?"
+        reminderTime="09:00"
+        description=""
+      />,
+    );
+    expect(
+      screen.getByText("Question · Reminder (needs account)"),
+    ).toBeInTheDocument();
+  });
+
+  it("marks the active habit type segment", () => {
+    render(
+      <HabitView
+        {...baseProps}
+        habitType="measurable"
+        setHabitType={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "Measurable" })).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    expect(screen.getByRole("tab", { name: "Yes or No" })).toHaveAttribute(
+      "data-state",
+      "inactive",
+    );
+  });
+});

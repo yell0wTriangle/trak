@@ -1,0 +1,141 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import { useFocusTimer } from "@/lib/hooks/useFocusTimer";
+import { useTimerStore } from "@/lib/store/timerStore";
+import { DEFAULT_TIMER_SETTINGS } from "@/lib/types/timer";
+
+// ===== Hoisted mocks =====
+
+const { mockLogSession, mockUpsertTimerState, notifyMock } = vi.hoisted(() => ({
+  mockLogSession: vi.fn(),
+  mockUpsertTimerState: vi.fn(),
+  notifyMock: vi.fn(),
+}));
+
+vi.mock("@/lib/mutations/focus", () => ({
+  focusMutations: {
+    logSession: mockLogSession,
+    upsertTimerState: mockUpsertTimerState,
+  },
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: vi.fn(() => ({ invalidateQueries: vi.fn() })),
+  useMutation: vi.fn(() => ({ mutate: mockLogSession })),
+}));
+
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: vi.fn(() => {
+    const channelObj = {
+      on: vi.fn(
+        (
+          _event: string,
+          _config: Record<string, unknown>,
+          _callback: () => void,
+        ) => channelObj,
+      ),
+      subscribe: vi.fn((_callback?: (status: string) => void) => ({
+        unsubscribe: vi.fn(),
+      })),
+    };
+    return {
+      channel: vi.fn(() => channelObj),
+      removeChannel: vi.fn(),
+      // useTimerSync's mount-time hydrate() (#129) selects the current row —
+      // no row exists in this suite's fixtures.
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+          })),
+        })),
+      })),
+    };
+  }),
+}));
+
+vi.mock("@/lib/store/uiStore", () => ({
+  useUiStore: {
+    getState: vi.fn(() => ({ isPipActive: false, setIsSynced: vi.fn() })),
+  },
+}));
+
+vi.mock("@/lib/store/focusHistoryStore", () => ({
+  useFocusHistoryStore: { getState: vi.fn(() => ({ addSession: vi.fn() })) },
+}));
+
+vi.mock("@/components/AuthProvider", () => ({
+  useAuth: vi.fn(() => ({ isGuestMode: false, user: { id: "user-1" } })),
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: vi.fn(() => "/"),
+}));
+
+vi.mock("@/lib/hooks/useFocusSounds", () => ({
+  useFocusSounds: vi.fn(() => ({ play: vi.fn() })),
+}));
+
+vi.mock("@/lib/hooks/usePushNotifications", () => ({
+  usePushNotifications: vi.fn(() => ({ showNotification: vi.fn() })),
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
+}));
+
+vi.mock("@/lib/hooks/useHaptic", () => ({
+  useHaptic: vi.fn(() => ({ trigger: vi.fn(), isPhone: false })),
+}));
+
+describe("Focus History — cancel does not log session", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    localStorage.clear();
+
+    // Reset timer store to defaults
+    useTimerStore.setState({
+      state: {
+        mode: "focus",
+        isRunning: false,
+        remainingSeconds: DEFAULT_TIMER_SETTINGS.focusDuration * 60,
+        completedSessions: 0,
+        activeTaskId: null,
+        endsAt: null,
+        sourceDeviceId: null,
+      },
+      settings: DEFAULT_TIMER_SETTINGS,
+      isLoaded: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("should NOT call logFocusSession when cancel() is called during an active session", async () => {
+    // Given: A running timer with an active task
+    useTimerStore.setState((s) => ({
+      state: {
+        ...s.state,
+        isRunning: true,
+        remainingSeconds: 1200,
+        completedSessions: 2,
+        activeTaskId: "task-active",
+        endsAt: Date.now() + 1200 * 1000, // 1200s left
+        sourceDeviceId: null,
+      },
+    }));
+
+    // When: Rendering useFocusTimer and calling cancel
+    const { result } = renderHook(() => useFocusTimer());
+
+    await act(async () => {
+      result.current.cancel();
+    });
+
+    // Then: logSession should NOT have been called
+    expect(mockLogSession).not.toHaveBeenCalled();
+  });
+});

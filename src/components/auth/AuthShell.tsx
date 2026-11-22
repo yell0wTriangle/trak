@@ -1,0 +1,47 @@
+"use client";
+
+import Image from "next/image";
+import * as m from "motion/react-m";
+import { slideUp } from "@/lib/motion";
+import { usePrefersReducedMotion } from "@/lib/hooks/usePrefersReducedMotion";
+
+export function AuthShell({
+  children,
+  footer,
+}: {
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  const motionProps = prefersReducedMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        transition: { duration: 0 },
+      }
+    : slideUp;
+
+  return (
+    <div className="h-dvh w-full overflow-y-auto bg-background">
+      <div className="min-h-full flex items-center justify-center px-2 py-4 sm:p-4">
+        <m.div {...motionProps} className="max-w-md w-full space-y-5">
+          <div className="px-4 py-6 sm:p-8 rounded-xl border border-border bg-card shadow-sm">
+            <div className="flex flex-col items-center gap-5 sm:gap-6">
+              <Image
+                src="/focus-meridian-icon.png"
+                alt="Focus Meridian"
+                width={64}
+                height={64}
+                priority
+                className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl shrink-0"
+              />
+              {children}
+            </div>
+          </div>
+          {footer}
+        </m.div>
+      </div>
+    </div>
+  );
+}

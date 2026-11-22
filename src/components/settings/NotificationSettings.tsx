@@ -1,0 +1,506 @@
+"use client";
+
+import {
+  Bell,
+  BellOff,
+  Globe,
+  Coffee,
+  Moon,
+  Calendar,
+  Clock,
+  Timer,
+  Repeat,
+  CalendarClock,
+} from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { usePushNotifications } from "@/lib/hooks/usePushNotifications";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { useProfile } from "@/lib/hooks/useProfile";
+import { useAuth } from "@/components/AuthProvider";
+import { notify } from "@/lib/notify";
+import { sendPushNotification } from "@/lib/push-api";
+import { useAndroidBatteryHint } from "@/lib/hooks/useAndroidBatteryHint";
+import { AndroidBatteryHint } from "@/components/settings/AndroidBatteryHint";
+import { ToggleRow } from "@/components/settings/ToggleRow";
+import { isIOS, isStandalone } from "@/lib/utils/platform";
+import {
+  DEFAULT_EVENT_REMINDER_MINUTES,
+  type UserSettings,
+} from "@/lib/types/profile";
+import { TIMED_REMINDER_OPTIONS } from "@/lib/utils/eventReminder";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useState, useMemo } from "react";
+
+type NotifySettings = NonNullable<UserSettings["notifications"]>;
+
+const getInitialTimezones = () => {
+  if (typeof window === "undefined")
+    return ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+  try {
+    return (
+      Intl as unknown as { supportedValuesOf: (key: string) => string[] }
+    ).supportedValuesOf("timeZone");
+  } catch {
+    return ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"];
+  }
+};
+
+export function NotificationSettings() {
+  const {
+    isSupported,
+    permission,
+    notificationsEnabled,
+    isSyncing,
+    requestPermission,
+    subscribeToPush,
+    unsubscribe,
+    showNotification,
+  } = usePushNotifications();
+  const { isGuestMode } = useAuth();
+  const { profile, updateProfile, updateSettings } = useProfile();
+  const { trigger } = useHaptic();
+
+  const [timezones] = useState<string[]>(getInitialTimezones);
+  const [timezoneSearch, setTimezoneSearch] = useState("");
+
+  const {
+    isAndroidChromeBrowser,
+    isOpen: batteryHintOpen,
+    promptIfDue: promptBatteryHintIfDue,
+    dismiss: handleDismissBatteryHint,
+    reopen: handleReopenBatteryHint,
+  } = useAndroidBatteryHint();
+
+  const timezoneOptions = useMemo(() => {
+    const now = new Date();
+    return timezones.map((tz) => {
+      try {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          timeZoneName: "shortOffset",
+        });
+        const parts = formatter.formatToParts(now);
+        const offset =
+          parts.find((p) => p.type === "timeZoneName")?.value || "";
+        return {
+          id: tz,
+          label: tz.replace(/_/g, " "),
+          offset: offset.replace("GMT", "UTC"),
+          searchable: `${tz} ${offset}`.toLowerCase().replace(/[_/]/g, " "),
+        };
+      } catch {
+        return {
+          id: tz,
+          label: tz.replace(/_/g, " "),
+          offset: "",
+          searchable: tz.toLowerCase().replace(/[_/]/g, " "),
+        };
+      }
+    });
+  }, [timezones]);
+
+  // Keeps the current selection visible even if search/pagination would cut it.
+  const filteredTimezones = useMemo(() => {
+    const search = timezoneSearch.toLowerCase().trim();
+    const currentTz = profile?.timezone || "UTC";
+
+    const results = search
+      ? timezoneOptions.filter((opt) => opt.searchable.includes(search))
+      : timezoneOptions;
+
+    const topResults = results.slice(0, 100);
+    const isSelectedInTop = topResults.some((opt) => opt.id === currentTz);
+
+    if (!isSelectedInTop) {
+      const selectedOpt = results.find((opt) => opt.id === currentTz);
+      if (selectedOpt) {
+        return [selectedOpt, ...topResults];
+      }
+    }
+
+    return topResults;
+  }, [timezoneOptions, timezoneSearch, profile?.timezone]);
+
+  const handleTogglePush = async (checked: boolean) => {
+    if (isSyncing) return;
+    trigger("toggle");
+
+    if (!isSupported) {
+      notify.error("Push notifications are not supported in this browser");
+      return;
+    }
+
+    if (checked) {
+      const result = await requestPermission({ forceRefresh: true });
+      if (result.permission === "granted" && result.subscription) {
+        notify.success("Notifications enabled");
+        promptBatteryHintIfDue();
+      } else if (result.permission === "denied") {
+        notify.error("Permission denied. Enable in browser settings.");
+      } else {
+        notify.error("Failed to activate notifications on this device.");
+      }
+    } else {
+      await unsubscribe();
+      notify.success("Notifications disabled");
+    }
+  };
+
+  const updateNotifySetting = async <K extends keyof NotifySettings>(
+    key: K,
+    value: NotifySettings[K],
+  ) => {
+    trigger("tick");
+    try {
+      await updateSettings.mutateAsync({
+        notifications: {
+          ...profile?.settings?.notifications,
+          [key]: value,
+        },
+      } as Parameters<typeof updateSettings.mutateAsync>[0]);
+    } catch {
+      notify.error("Failed to update settings");
+    }
+  };
+
+  const handleTestNotification = async () => {
+    trigger("toggle");
+    if (permission !== "granted") {
+      notify.error("Please enable notifications first");
+      return;
+    }
+
+    try {
+      const activeSubscription = await subscribeToPush("granted", {
+        forceRefresh: true,
+      });
+
+      if (!activeSubscription) {
+        notify.error("Failed to refresh notifications on this device");
+        return;
+      }
+
+      await sendPushNotification({
+        endpoint: activeSubscription.endpoint,
+        title: "Test Notification",
+        body: "This is a server-sent test notification from Focus Meridian",
+        data: { type: "test" },
+      });
+      notify.success("Test notification sent to this device");
+    } catch {
+      notify.error("Failed to send test notification");
+    }
+  };
+
+  const handleLocalTestNotification = () => {
+    trigger("toggle");
+    if (permission !== "granted") {
+      notify.error("Please enable notifications first");
+      return;
+    }
+
+    showNotification("Local Test Notification", {
+      body: "This notification was triggered locally from the browser.",
+      tag: "kanso-local-test",
+    });
+    notify.success("Local notification triggered");
+  };
+
+  if (!isSupported) {
+    // iOS only exposes push APIs once installed to the Home Screen — "not
+    // supported" here means the browser tab, not the device.
+    const iosNeedsInstall = isIOS() && !isStandalone();
+
+    return (
+      <div className="p-4 rounded-lg border border-border/50 bg-muted/30">
+        <div className="flex items-center gap-3 mb-2">
+          <BellOff
+            className="h-4 w-4 text-muted-foreground"
+            strokeWidth={2.25}
+          />
+          <p className="text-sm font-medium text-muted-foreground">
+            {iosNeedsInstall
+              ? "Add Focus Meridian to your Home Screen to turn on notifications"
+              : "Notifications Not Supported"}
+          </p>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {iosNeedsInstall
+            ? "Tap Share, then Add to Home Screen."
+            : "Your browser doesn't support push notifications"}
+        </p>
+      </div>
+    );
+  }
+
+  const settings = profile?.settings?.notifications;
+  const eventRemindersOn = settings?.event_reminders ?? true;
+  const showBatteryHintArea =
+    isAndroidChromeBrowser &&
+    !isGuestMode &&
+    permission === "granted" &&
+    notificationsEnabled;
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center justify-between p-4 rounded-lg border border-border/50 bg-background">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-full bg-secondary/30">
+                  <Bell
+                    className="h-4 w-4 text-muted-foreground"
+                    strokeWidth={2.25}
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">Push Notifications</p>
+                  <p className="text-xs text-muted-foreground">
+                    {isGuestMode
+                      ? "Sign in to enable notifications"
+                      : permission === "granted"
+                        ? "Receive updates and reminders"
+                        : "Enable to receive updates"}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={
+                  !isGuestMode &&
+                  notificationsEnabled &&
+                  permission === "granted"
+                }
+                onCheckedChange={handleTogglePush}
+                disabled={isGuestMode || permission === "denied" || isSyncing}
+                aria-label="Push Notifications"
+              />
+            </div>
+          </TooltipTrigger>
+          {isGuestMode && (
+            <TooltipContent className="hidden md:block">
+              Available for registered users only
+            </TooltipContent>
+          )}
+        </Tooltip>
+        {!isGuestMode &&
+          permission === "granted" &&
+          notificationsEnabled &&
+          !isSyncing && (
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={handleTestNotification}
+              >
+                <Bell className="h-4 w-4 mr-2" strokeWidth={2.25} />
+                Send Test Notification (Server)
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full text-[10px] text-muted-foreground hover:text-foreground h-7"
+                onClick={handleLocalTestNotification}
+              >
+                Trigger Local Notification (Sanity Check)
+              </Button>
+            </div>
+          )}
+        {showBatteryHintArea &&
+          (batteryHintOpen ? (
+            <AndroidBatteryHint onDismiss={handleDismissBatteryHint} />
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full text-[10px] text-muted-foreground hover:text-foreground h-7"
+              onClick={handleReopenBatteryHint}
+            >
+              Notifications arriving late on Android?
+            </Button>
+          ))}
+      </div>
+
+      {!isGuestMode && (
+        <div className="space-y-3 pt-2 border-t border-border/50">
+          <div className="flex items-center gap-2 mb-1">
+            <Globe
+              className="h-3.5 w-3.5 text-muted-foreground"
+              strokeWidth={2.25}
+            />
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Local Time
+            </h3>
+          </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs text-muted-foreground">
+              Confirm your timezone to ensure morning briefings and task alerts
+              arrive at the right local time.
+            </p>
+            <Select
+              value={profile?.timezone || "UTC"}
+              onValueChange={(val) => {
+                trigger("toggle");
+                updateProfile.mutate({ timezone: val });
+                setTimezoneSearch("");
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label="Select Timezone">
+                <SelectValue placeholder="Select Timezone" />
+              </SelectTrigger>
+              <SelectContent className="max-h-[300px] w-[--radix-select-trigger-width]">
+                <div className="sticky top-0 z-10 bg-popover px-2 py-2 pt-4 border-b border-border/50">
+                  <input
+                    type="text"
+                    placeholder="Search timezone..."
+                    aria-label="Search timezone"
+                    value={timezoneSearch}
+                    onChange={(e) => setTimezoneSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Prevent Radix Select from intercepting key events
+                      e.stopPropagation();
+                    }}
+                    className="w-full px-3 py-1.5 text-sm bg-background border border-border/50 rounded-md focus:outline-none focus:ring-1 focus:ring-brand"
+                  />
+                </div>
+                <div className="overflow-y-auto max-h-[240px]">
+                  {filteredTimezones.length === 0 ? (
+                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                      No timezone found
+                    </div>
+                  ) : (
+                    filteredTimezones.map((tz) => {
+                      return (
+                        <SelectItem key={tz.id} value={tz.id}>
+                          <div className="flex items-center justify-between gap-3 w-full">
+                            <span className="truncate">{tz.label}</span>
+                            {tz.offset && (
+                              <span className="text-xs text-muted-foreground font-mono shrink-0">
+                                {tz.offset}
+                              </span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      );
+                    })
+                  )}
+                </div>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )}
+
+      {permission === "granted" && notificationsEnabled && !isGuestMode && (
+        <div className="space-y-3 pt-2 border-t border-border/50">
+          <div className="flex items-center gap-2 mb-1">
+            <Clock
+              className="h-3.5 w-3.5 text-muted-foreground"
+              strokeWidth={2.25}
+            />
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Schedules
+            </h3>
+          </div>
+
+          <div className="space-y-2">
+            <ToggleRow
+              icon={Coffee}
+              title="Morning Briefing"
+              description="Daily summary at 8:00 AM"
+              checked={settings?.morning_briefing ?? true}
+              onChange={(c) => updateNotifySetting("morning_briefing", c)}
+            />
+
+            <ToggleRow
+              icon={Moon}
+              title="Evening Plan"
+              description="Review tonight's tasks at 6:00 PM"
+              checked={settings?.evening_plan ?? true}
+              onChange={(c) => updateNotifySetting("evening_plan", c)}
+            />
+
+            <ToggleRow
+              icon={Calendar}
+              title="Due Date Alerts"
+              description="When a task reaches its deadline"
+              checked={settings?.due_date_alerts ?? true}
+              onChange={(c) => updateNotifySetting("due_date_alerts", c)}
+            />
+
+            <ToggleRow
+              icon={Timer}
+              title="Timer Completion"
+              description="When your focus or break ends"
+              checked={settings?.timer_alerts ?? true}
+              onChange={(c) => updateNotifySetting("timer_alerts", c)}
+            />
+
+            <ToggleRow
+              icon={Repeat}
+              title="Habit Reminders"
+              description="At the reminder time set on each habit"
+              checked={settings?.habit_reminders ?? true}
+              onChange={(c) => updateNotifySetting("habit_reminders", c)}
+            />
+
+            <ToggleRow
+              icon={CalendarClock}
+              title="Event Reminders"
+              description="Before calendar events that have a reminder"
+              checked={eventRemindersOn}
+              onChange={(c) => updateNotifySetting("event_reminders", c)}
+            />
+
+            {eventRemindersOn && (
+              <div className="flex items-center justify-between p-3 min-h-[44px] rounded-md border border-border/30 bg-muted/20">
+                <div>
+                  <p className="text-sm font-medium">Default lead time</p>
+                  <p className="type-micro text-muted-foreground">
+                    Applied to new events
+                  </p>
+                </div>
+                <Select
+                  value={String(
+                    settings?.event_reminder_minutes ??
+                      DEFAULT_EVENT_REMINDER_MINUTES,
+                  )}
+                  onValueChange={(val) =>
+                    updateNotifySetting("event_reminder_minutes", Number(val))
+                  }
+                >
+                  <SelectTrigger
+                    className="h-8 w-auto"
+                    aria-label="Default reminder lead time"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TIMED_REMINDER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={String(o.value)}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

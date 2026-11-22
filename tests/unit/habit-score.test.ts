@@ -1,0 +1,346 @@
+import { describe, it, expect } from "vitest";
+import { dayValue, computeScores, currentScore } from "@/lib/utils/habit-score";
+import { frequencyWindowDays } from "@/lib/utils/habit-frequency";
+import type { Habit, HabitEntry } from "@/lib/types/habit";
+
+function entry(date: string, value: number): HabitEntry {
+  return {
+    id: `e-${date}`,
+    habit_id: "h1",
+    date,
+    value,
+    created_at: `${date}T00:00:00.000Z`,
+  };
+}
+
+const dailyBoolean: Habit = {
+  id: "h1",
+  user_id: "u1",
+  name: "Exercise",
+  description: null,
+  color: "#ff0000",
+  icon: null,
+  created_at: "2026-01-01T00:00:00.000Z",
+  updated_at: "2026-01-01T00:00:00.000Z",
+  archived_at: null,
+  start_date: null,
+  sort_order: 0,
+  habit_type: "boolean",
+  frequency_count: 1,
+  frequency_period: "day",
+};
+
+describe("frequencyWindowDays", () => {
+  it("prefers frequency_days over the period", () => {
+    expect(
+      frequencyWindowDays({ frequency_days: 50, frequency_period: null }),
+    ).toBe(50);
+    expect(
+      frequencyWindowDays({ frequency_days: 3, frequency_period: "week" }),
+    ).toBe(3);
+  });
+
+  it("falls back to the period's day count for period-only habits", () => {
+    expect(frequencyWindowDays({ frequency_period: "day" })).toBe(1);
+    expect(frequencyWindowDays({ frequency_period: "week" })).toBe(7);
+    expect(frequencyWindowDays({ frequency_period: "month" })).toBe(30);
+  });
+
+  it("defaults to 1 when neither is set", () => {
+    expect(frequencyWindowDays({ frequency_period: null })).toBe(1);
+    expect(frequencyWindowDays({})).toBe(1);
+  });
+});
+
+describe("dayValue", () => {
+  it("returns 1 for boolean done", () => {
+    expect(dayValue(1, dailyBoolean)).toBe(1);
+  });
+
+  it("returns 0 for boolean not-done", () => {
+    expect(dayValue(0, dailyBoolean)).toBe(0);
+  });
+
+  describe("measurable at_least (target=10)", () => {
+    const atLeast: Habit = {
+      ...dailyBoolean,
+      habit_type: "measurable",
+      target_type: "at_least",
+      target_value: 10,
+    };
+
+    it("returns 1 when entry meets target", () => {
+      expect(dayValue(10, atLeast)).toBe(1);
+    });
+
+    it("returns 1 when entry exceeds target", () => {
+      expect(dayValue(15, atLeast)).toBe(1);
+    });
+
+    it("returns fraction when entry is below target", () => {
+      expect(dayValue(5, atLeast)).toBeCloseTo(0.5);
+    });
+
+    it("returns 0 for zero entry", () => {
+      expect(dayValue(0, atLeast)).toBe(0);
+    });
+  });
+
+  describe("measurable at_most (target=10)", () => {
+    const atMost: Habit = {
+      ...dailyBoolean,
+      habit_type: "measurable",
+      target_type: "at_most",
+      target_value: 10,
+    };
+
+    it("returns 1 when entry is at target", () => {
+      expect(dayValue(10, atMost)).toBe(1);
+    });
+
+    it("returns 1 when entry is below target", () => {
+      expect(dayValue(5, atMost)).toBeCloseTo(1);
+    });
+
+    it("returns 0 when entry is 2x target (inverted)", () => {
+      expect(dayValue(20, atMost)).toBeCloseTo(0);
+    });
+
+    it("returns 1 for zero entry (best for at_most)", () => {
+      expect(dayValue(0, atMost)).toBeCloseTo(1);
+    });
+
+    it("at_most with target=0: returns 1 for zero, 0 for positive", () => {
+      const zeroTarget: Habit = {
+        ...dailyBoolean,
+        habit_type: "measurable",
+        target_type: "at_most",
+        target_value: 0,
+      };
+      expect(dayValue(0, zeroTarget)).toBe(1);
+      expect(dayValue(1, zeroTarget)).toBe(0);
+    });
+  });
+});
+
+describe("computeScores — daily boolean", () => {
+  it("returns empty array with no entries", () => {
+    const scores = computeScores(dailyBoolean, [], {
+      from: new Date("2026-06-10"),
+      to: new Date("2026-06-10"),
+    });
+    expect(scores).toEqual([]);
+  });
+
+  it("computes score series for a single entry day", () => {
+    // daily boolean: frequency=1.0, multiplier=0.5^(1/13)≈0.948089
+    const entries = [entry("2026-06-10", 1)];
+    const to = new Date("2026-06-10T12:00:00");
+    const scores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-10"),
+      to,
+    });
+
+    expect(scores).toHaveLength(1);
+    expect(scores[0].date).toBe("2026-06-10");
+    // score = 0 * m + 1 * (1-m) = 1 - m ≈ 0.051911
+    expect(scores[0].value).toBeGreaterThan(0.05);
+    expect(scores[0].value).toBeLessThan(0.06);
+  });
+
+  it("computes cumulative scores over consecutive done days", () => {
+    const entries = [
+      entry("2026-06-08", 1),
+      entry("2026-06-09", 1),
+      entry("2026-06-10", 1),
+    ];
+    const to = new Date("2026-06-10T12:00:00");
+    const scores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-08"),
+      to,
+    });
+
+    expect(scores).toHaveLength(3);
+    // Each day's score should be higher than the previous (building up)
+    expect(scores[1].value).toBeGreaterThan(scores[0].value);
+    expect(scores[2].value).toBeGreaterThan(scores[1].value);
+  });
+
+  it("fills missing days with value 0 (score decays)", () => {
+    // June 8 done, June 9 missing, June 10 done
+    const entries = [entry("2026-06-08", 1), entry("2026-06-10", 1)];
+    const to = new Date("2026-06-10T12:00:00");
+    const scores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-08"),
+      to,
+    });
+
+    expect(scores).toHaveLength(3);
+    // Day 2 (missing) should have lower score than day 1 (done)
+    expect(scores[1].value).toBeLessThan(scores[0].value);
+    // Day 3 (done) recovers
+    expect(scores[2].value).toBeGreaterThan(scores[1].value);
+  });
+});
+
+const threePerWeek: Habit = {
+  ...dailyBoolean,
+  frequency_count: 3,
+  frequency_period: "week",
+};
+
+describe("computeScores — 3×/week boolean", () => {
+  it("uses a lower decay multiplier than daily (score decays slower on off-days)", () => {
+    // 3×/week: frequency=3/7≈0.4286, multiplier≈0.9658
+    // daily: frequency=1, multiplier≈0.9481
+    // A single done-day should produce a lower initial score for 3×/week
+    // because the multiplier is higher (slower buildup)
+    const entries = [entry("2026-06-10", 1)];
+    const to = new Date("2026-06-10T12:00:00");
+
+    const dailyScores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-10"),
+      to,
+    });
+    const freqScores = computeScores(threePerWeek, entries, {
+      from: new Date("2026-06-10"),
+      to,
+    });
+
+    // 3×/week has higher multiplier → lower initial single-day score
+    expect(freqScores[0].value).toBeLessThan(dailyScores[0].value);
+  });
+
+  it("decays on off-days but slower than daily", () => {
+    // One done day, then 3 off days
+    const entries = [entry("2026-06-08", 1)];
+    const to = new Date("2026-06-11T12:00:00");
+
+    const dailyScores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-08"),
+      to,
+    });
+    const freqScores = computeScores(threePerWeek, entries, {
+      from: new Date("2026-06-08"),
+      to,
+    });
+
+    // 3×/week starts lower (higher multiplier → lower initial score)
+    // but decays proportionally slower (each off-day loses less %)
+    const dailyDecayRate = dailyScores[3].value / dailyScores[0].value;
+    const freqDecayRate = freqScores[3].value / freqScores[0].value;
+    expect(freqDecayRate).toBeGreaterThan(dailyDecayRate);
+  });
+});
+
+describe("computeScores — entry order independence", () => {
+  it("derives the start date from the earliest entry regardless of array order", () => {
+    // Entries supplied newest-first (e.g. as Supabase/mock-store may return them
+    // with no ORDER BY). The series must still span from the oldest entry.
+    const ascending = [
+      entry("2026-06-08", 1),
+      entry("2026-06-09", 1),
+      entry("2026-06-10", 1),
+    ];
+    const descending = [...ascending].reverse();
+    const to = new Date("2026-06-10T12:00:00");
+
+    const fromAscending = computeScores(dailyBoolean, ascending, { to });
+    const fromDescending = computeScores(dailyBoolean, descending, { to });
+
+    // A 3-day window, not collapsed to ~1 day by a bad start date.
+    expect(fromAscending).toHaveLength(3);
+    expect(fromDescending).toEqual(fromAscending);
+  });
+});
+
+describe("currentScore — daily boolean", () => {
+  it("returns 0 with no entries", () => {
+    expect(currentScore(dailyBoolean, [])).toBe(0);
+  });
+
+  it("returns the score of the last day in the series", () => {
+    const entries = [
+      entry("2026-06-08", 1),
+      entry("2026-06-09", 1),
+      entry("2026-06-10", 1),
+    ];
+    const score = currentScore(dailyBoolean, entries);
+    // Should be > 0 and < 1
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThan(1);
+  });
+});
+
+describe("computeScores — skipped entries (freeze decay)", () => {
+  it("freezes score decay on a skipped entry (S_k = S_{k-1})", () => {
+    // Day 1: done (score rises)
+    // Day 2: skip (-2) -> score should equal Day 1 score exactly (frozen, no decay)
+    // Day 3: miss (0) -> score decays from Day 2's frozen score
+    const entries = [
+      entry("2026-06-08", 1),
+      entry("2026-06-09", -2),
+      entry("2026-06-10", 0),
+    ];
+    const to = new Date("2026-06-10T12:00:00");
+    const scores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-08"),
+      to,
+    });
+
+    expect(scores).toHaveLength(3);
+    const day1Score = scores[0].value;
+    const day2Score = scores[1].value;
+    const day3Score = scores[2].value;
+
+    expect(day1Score).toBeGreaterThan(0);
+    // Day 2 is skipped: score MUST freeze at Day 1 score
+    expect(day2Score).toBe(day1Score);
+    // Day 3 is missed: score decays below Day 2 score
+    expect(day3Score).toBeLessThan(day2Score);
+  });
+
+  it("freezes score over multiple consecutive skipped days", () => {
+    const entries = [
+      entry("2026-06-01", 1),
+      entry("2026-06-02", -2),
+      entry("2026-06-03", -2),
+      entry("2026-06-04", -2),
+    ];
+    const to = new Date("2026-06-04T12:00:00");
+    const scores = computeScores(dailyBoolean, entries, {
+      from: new Date("2026-06-01"),
+      to,
+    });
+
+    expect(scores).toHaveLength(4);
+    const day1Score = scores[0].value;
+    expect(scores[1].value).toBe(day1Score);
+    expect(scores[2].value).toBe(day1Score);
+    expect(scores[3].value).toBe(day1Score);
+  });
+
+  it("currentScore preserves frozen score when the most recent entry is a skip", () => {
+    const to = new Date("2026-06-09T12:00:00");
+    const entries = [entry("2026-06-08", 1), entry("2026-06-09", -2)];
+    const scores = computeScores(dailyBoolean, entries, { to });
+    const score = currentScore(dailyBoolean, entries, { to });
+    expect(score).toBe(scores[0].value);
+  });
+});
+
+describe("computeScores — frequency_days normalization", () => {
+  it("uses uhabits' 0.5^(sqrt(count/D)/13) multiplier for 1 in 50", () => {
+    const habit: Habit = {
+      ...dailyBoolean,
+      frequency_count: 1,
+      frequency_days: 50,
+      frequency_period: null,
+    };
+    const scores = computeScores(habit, [entry("2026-06-01", 1)], {
+      to: new Date("2026-06-01T12:00:00"),
+    });
+    const multiplier = Math.pow(0.5, Math.sqrt(1 / 50) / 13);
+    expect(scores[0].value).toBeCloseTo(1 - multiplier, 10);
+  });
+});

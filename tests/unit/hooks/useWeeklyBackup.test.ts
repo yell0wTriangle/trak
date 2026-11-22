@@ -1,0 +1,235 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook } from "@testing-library/react";
+
+let mockShouldPrompt = false;
+vi.mock("@/lib/hooks/useTelemetryConsent", () => ({
+  useTelemetryConsent: () => ({
+    shouldPrompt: mockShouldPrompt,
+    consent: mockShouldPrompt ? "unprompted" : "granted",
+    setConsent: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: vi.fn(),
+}));
+
+vi.mock("@/lib/backup/export-import", () => ({
+  createBackupZip: vi.fn().mockResolvedValue(new Blob(["test"])),
+  downloadBackup: vi.fn(),
+}));
+
+vi.mock("@/components/AuthProvider", () => ({
+  useAuth: () => ({ isGuestMode: true }),
+}));
+
+vi.mock("@/lib/mock/mock-store", () => ({
+  mockStore: {
+    getTasks: vi.fn().mockReturnValue([]),
+    getProjects: vi.fn().mockReturnValue([]),
+    getHabits: vi.fn().mockReturnValue([]),
+    getHabitEntries: vi.fn().mockReturnValue([]),
+    getFocusLogs: vi.fn().mockReturnValue([]),
+    getEvents: vi.fn().mockReturnValue([]),
+  },
+}));
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const STORAGE_KEY = "kanso_last_backup_date";
+const SESSION_KEY = "kanso_backup_prompted";
+
+describe("useWeeklyBackup", () => {
+  beforeEach(async () => {
+    mockShouldPrompt = false;
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    const { useUiStore } = await import("@/lib/store/uiStore");
+    useUiStore.setState({
+      backupReminderEnabled: true,
+      backupReminderFrequencyDays: 7,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not show toast if backup is recent", async () => {
+    localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("shows toast if backup is older than 7 days", async () => {
+    const oldDate = new Date(Date.now() - SEVEN_DAYS_MS - 1000);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      "It's been a while since your last backup — back up now to prevent loss",
+      expect.objectContaining({
+        id: "backup-reminder",
+        action: expect.objectContaining({
+          label: "Back Up Now",
+        }),
+      }),
+    );
+  });
+
+  it("does not show toast while telemetry consent is prompting", async () => {
+    mockShouldPrompt = true;
+    const oldDate = new Date(Date.now() - SEVEN_DAYS_MS - 1000);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("shows toast once telemetry prompt is resolved", async () => {
+    mockShouldPrompt = true;
+    const oldDate = new Date(Date.now() - SEVEN_DAYS_MS - 1000);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    const { rerender } = renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    expect(notify).not.toHaveBeenCalled();
+
+    mockShouldPrompt = false;
+    rerender();
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).toHaveBeenCalledWith(
+      "It's been a while since your last backup — back up now to prevent loss",
+      expect.objectContaining({
+        id: "backup-reminder",
+      }),
+    );
+  });
+
+  it("does not call a first-time guest overdue: the clock starts at the first visit", async () => {
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("reminds a guest who never backed up once the period has passed since their first visit", async () => {
+    localStorage.setItem(
+      "kanso_backup_reminder_since",
+      new Date(Date.now() - SEVEN_DAYS_MS - 1000).toISOString(),
+    );
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).toHaveBeenCalled();
+  });
+
+  it("does not show toast twice in same session", async () => {
+    const oldDate = new Date(Date.now() - SEVEN_DAYS_MS - 1000);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+    sessionStorage.setItem(SESSION_KEY, "true");
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not show toast when the backup reminder is disabled, even if stale", async () => {
+    const oldDate = new Date(Date.now() - SEVEN_DAYS_MS - 1000);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+
+    const { useUiStore } = await import("@/lib/store/uiStore");
+    useUiStore.setState({ backupReminderEnabled: false });
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("uses backupReminderFrequencyDays instead of the hardcoded 7-day window", async () => {
+    const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+    const oldDate = new Date(Date.now() - TEN_DAYS_MS);
+    localStorage.setItem(STORAGE_KEY, oldDate.toISOString());
+
+    const { useUiStore } = await import("@/lib/store/uiStore");
+    useUiStore.setState({ backupReminderFrequencyDays: 14 });
+
+    const { useWeeklyBackup } = await import("@/lib/hooks/useWeeklyBackup");
+    const { notify } = await import("@/lib/notify");
+
+    renderHook(() => useWeeklyBackup());
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+
+    // 10 days elapsed is within the configured 14-day cadence.
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+function act(callback: () => void) {
+  callback();
+}

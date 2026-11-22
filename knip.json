@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "app/**/{page,layout,template,not-found,error,loading,route}.{ts,tsx}",
+    "app/sw.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "app/**/*.{ts,tsx}"],
+  "ignore": ["src/components/ui/**"],
+  "ignoreDependencies": [
+    "autoprefixer",
+    "tailwindcss",
+    "tailwindcss-animate",
+    "@tailwindcss/typography",
+    "supabase"
+  ]
+}

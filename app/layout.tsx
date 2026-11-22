@@ -1,0 +1,103 @@
+import type { Metadata, Viewport } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { cookies } from "next/headers";
+import "./globals.css";
+import { AuthProvider } from "@/components/AuthProvider";
+import QueryProvider from "@/components/QueryProvider";
+import { TimerProvider } from "@/components/TimerProvider";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { MotionProvider } from "@/components/providers/MotionProvider";
+import AppShell from "@/components/layout/AppShell";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+  adjustFontFallback: true,
+});
+
+const jetbrains = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains",
+  display: "swap",
+});
+
+export const metadata: Metadata = {
+  title: "Focus Meridian",
+  description: "Your personal productivity super-app",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    title: "Focus Meridian",
+  },
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F5F5F2" },
+    { media: "(prefers-color-scheme: dark)", color: "#212121" },
+  ],
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+};
+
+export default async function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  const cookieStore = await cookies();
+  const initialIsGuest = cookieStore.get("kanso_guest_mode")?.value === "true";
+
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var storage = localStorage.getItem('kanso-ui-state');
+                  if (storage) {
+                    var parsed = JSON.parse(storage);
+                    if (parsed && parsed.state) {
+                      var state = parsed.state;
+                      if (state.viewMode) {
+                        document.documentElement.setAttribute('data-view-mode', state.viewMode);
+                      }
+                    }
+                  }
+                } catch (e) {}
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body className={`${inter.variable} ${jetbrains.variable} antialiased`}>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          <QueryProvider>
+            <AuthProvider initialIsGuest={initialIsGuest}>
+              <TimerProvider>
+                <MotionProvider>
+                  <AppShell>{children}</AppShell>
+                </MotionProvider>
+              </TimerProvider>
+            </AuthProvider>
+          </QueryProvider>
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+}

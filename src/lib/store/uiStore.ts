@@ -1,0 +1,352 @@
+"use client";
+
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { GroupOption, SortOption, TaskViewMode } from "@/lib/types/sorting";
+import { StatsPeriod } from "@/lib/types/stats";
+
+const RETIRED_VIEW_MODES = new Set(["split", "grid"]);
+
+export interface GoalsState {
+  dailyFocusHours: number | null;
+  weeklyFocusHours: number | null;
+  dailyTasksCompleted: number | null;
+  weeklyTasksCompleted: number | null;
+}
+
+export type ShortcutTipAction =
+  "newTask" | "newHabit" | "newEvent" | "newProject" | "logbook";
+
+export type BoardInspectMode = "overlay" | "split";
+
+export type StepId = "task" | "habit" | "focus" | "import";
+
+export interface StartHereState {
+  eligible?: boolean;
+  dismissed: boolean;
+  done: StepId[];
+  tutorialProjectId?: string;
+}
+
+export function getStartHereState(
+  userId: string,
+  startHereStates: Record<string, StartHereState>,
+): StartHereState | null {
+  if (!userId) return null;
+  if (startHereStates[userId] !== undefined) {
+    return startHereStates[userId];
+  }
+  try {
+    if (typeof window !== "undefined") {
+      const raw = localStorage.getItem(`startHere:${userId}`);
+      if (raw) return JSON.parse(raw) as StartHereState;
+    }
+  } catch {
+    // Ignore parse error
+  }
+  return null;
+}
+
+interface UiState {
+  isProjectsOpen: boolean;
+  toggleProjectsOpen: () => void;
+
+  sortBy: SortOption;
+  groupBy: GroupOption;
+  viewMode: TaskViewMode;
+  boardInspectMode: BoardInspectMode;
+  setSortBy: (sort: SortOption) => void;
+  setGroupBy: (group: GroupOption) => void;
+  setViewMode: (mode: TaskViewMode) => void;
+  setBoardInspectMode: (mode: BoardInspectMode) => void;
+  // Set by drag handlers so the day_order-freeze effect skips drag-driven sortBy switches.
+  customSortEnteredViaDrag: boolean;
+  setCustomSortEnteredViaDrag: (value: boolean) => void;
+
+  habitViewMode: "grid" | "compact";
+  setHabitViewMode: (mode: "grid" | "compact") => void;
+
+  statsPeriod: StatsPeriod;
+  setStatsPeriod: (period: StatsPeriod) => void;
+  timeFormat: "12h" | "24h" | "system";
+  setTimeFormat: (format: "12h" | "24h" | "system") => void;
+  hapticsEnabled: boolean;
+  setHapticsEnabled: (enabled: boolean) => void;
+  notificationsEnabled: boolean;
+  setNotificationsEnabled: (enabled: boolean) => void;
+  backupReminderEnabled: boolean;
+  setBackupReminderEnabled: (enabled: boolean) => void;
+  backupReminderFrequencyDays: number;
+  setBackupReminderFrequencyDays: (days: number) => void;
+  autoLockEnabled: boolean;
+  setAutoLockEnabled: (enabled: boolean) => void;
+  autoLockMinutes: number;
+  setAutoLockMinutes: (minutes: number) => void;
+
+  shortcutTipsEnabled: boolean;
+  setShortcutTipsEnabled: (enabled: boolean) => void;
+  shownShortcutTips: Partial<Record<ShortcutTipAction, boolean>>;
+  shortcutMouseCounts: Partial<Record<ShortcutTipAction, number>>;
+  incrementShortcutMouseCount: (
+    action: ShortcutTipAction,
+    threshold: number,
+  ) => boolean;
+  setShortcutMouseCount: (action: ShortcutTipAction, count: number) => void;
+  markShortcutTipShown: (action: ShortcutTipAction) => void;
+
+  // Aggregate targets, not per-item (see CONTEXT.md "Goals").
+  goals: GoalsState;
+  setGoals: (goals: Partial<GoalsState>) => void;
+
+  isShortcutsHelpOpen: boolean;
+  setShortcutsHelpOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
+
+  isPipActive: boolean;
+  setIsPipActive: (active: boolean) => void;
+
+  isFullscreen: boolean;
+  setIsFullscreen: (fullscreen: boolean) => void;
+
+  isSynced: boolean;
+  setIsSynced: (synced: boolean) => void;
+
+  isArchivedProjectsOpen: boolean;
+  setArchivedProjectsOpen: (open: boolean) => void;
+
+  selectedTaskId: string | null;
+  setSelectedTaskId: (id: string | null) => void;
+  editingTaskId: string | null;
+  setEditingTaskId: (id: string | null) => void;
+
+  isDesktop: boolean;
+  setIsDesktop: (isDesktop: boolean) => void;
+
+  lastUndoAction: (() => void | Promise<void>) | null;
+  setLastUndoAction: (action: (() => void | Promise<void>) | null) => void;
+  triggerLastUndoAction: () => void | Promise<void>;
+
+  // Yanked task ID resolved against cache at paste time to avoid stale data.
+  yankedTaskId: string | null;
+  setYankedTaskId: (id: string | null) => void;
+
+  startHereStates: Record<string, StartHereState>;
+  setStartHereState: (userId: string, state: StartHereState) => void;
+
+  _hasHydrated: boolean;
+  setHasHydrated: (state: boolean) => void;
+}
+
+export const useUiStore = create<UiState>()(
+  persist(
+    (set, get) => ({
+      isProjectsOpen: true,
+      toggleProjectsOpen: () =>
+        set((state) => ({ isProjectsOpen: !state.isProjectsOpen })),
+
+      sortBy: "date",
+      groupBy: "none",
+      viewMode: "list",
+      boardInspectMode: "overlay",
+      setSortBy: (sort) => set({ sortBy: sort }),
+      setGroupBy: (group) => set({ groupBy: group }),
+      setViewMode: (mode) => set({ viewMode: mode }),
+      setBoardInspectMode: (mode) => set({ boardInspectMode: mode }),
+      customSortEnteredViaDrag: false,
+      setCustomSortEnteredViaDrag: (value) =>
+        set({ customSortEnteredViaDrag: value }),
+
+      habitViewMode: "grid",
+      setHabitViewMode: (mode) => set({ habitViewMode: mode }),
+
+      statsPeriod: "30d",
+      setStatsPeriod: (period) => set({ statsPeriod: period }),
+
+      timeFormat: "system",
+      setTimeFormat: (format) => set({ timeFormat: format }),
+      hapticsEnabled: true,
+      setHapticsEnabled: (enabled) => set({ hapticsEnabled: enabled }),
+      notificationsEnabled: false,
+      setNotificationsEnabled: (enabled) =>
+        set({ notificationsEnabled: enabled }),
+      backupReminderEnabled: true,
+      setBackupReminderEnabled: (enabled) =>
+        set({ backupReminderEnabled: enabled }),
+      backupReminderFrequencyDays: 7,
+      setBackupReminderFrequencyDays: (days) =>
+        set({ backupReminderFrequencyDays: days }),
+      autoLockEnabled: false,
+      setAutoLockEnabled: (enabled) => set({ autoLockEnabled: enabled }),
+      autoLockMinutes: 60,
+      // Clamp to prevent corrupted/stale values (<= 0) from continuously auto-locking.
+      setAutoLockMinutes: (minutes) =>
+        set({ autoLockMinutes: Math.max(1, minutes) }),
+
+      shortcutTipsEnabled: true,
+      setShortcutTipsEnabled: (enabled) =>
+        set({ shortcutTipsEnabled: enabled }),
+      shownShortcutTips: {},
+      shortcutMouseCounts: {},
+      incrementShortcutMouseCount: (action, threshold) => {
+        let reached = false;
+        set((state) => {
+          if (state.shownShortcutTips[action]) return state;
+          const currentCount = state.shortcutMouseCounts[action] ?? 0;
+          const nextCount = currentCount + 1;
+          if (nextCount >= threshold) {
+            reached = true;
+            return {
+              shortcutMouseCounts: {
+                ...state.shortcutMouseCounts,
+                [action]: nextCount,
+              },
+              shownShortcutTips: {
+                ...state.shownShortcutTips,
+                [action]: true,
+              },
+            };
+          }
+          return {
+            shortcutMouseCounts: {
+              ...state.shortcutMouseCounts,
+              [action]: nextCount,
+            },
+          };
+        });
+        return reached;
+      },
+      setShortcutMouseCount: (action, count) =>
+        set((state) => ({
+          shortcutMouseCounts: {
+            ...state.shortcutMouseCounts,
+            [action]: count,
+          },
+        })),
+      markShortcutTipShown: (action) =>
+        set((state) => ({
+          shownShortcutTips: { ...state.shownShortcutTips, [action]: true },
+        })),
+
+      goals: {
+        dailyFocusHours: null,
+        weeklyFocusHours: null,
+        dailyTasksCompleted: null,
+        weeklyTasksCompleted: null,
+      },
+      setGoals: (goals) => set((s) => ({ goals: { ...s.goals, ...goals } })),
+
+      isShortcutsHelpOpen: false,
+      setShortcutsHelpOpen: (open) =>
+        set((state) => ({
+          isShortcutsHelpOpen:
+            typeof open === "function"
+              ? (open as (prev: boolean) => boolean)(state.isShortcutsHelpOpen)
+              : open,
+        })),
+
+      isPipActive: false,
+      setIsPipActive: (active) => set({ isPipActive: active }),
+
+      isFullscreen: false,
+      setIsFullscreen: (fullscreen) => set({ isFullscreen: fullscreen }),
+
+      isSynced: false,
+      setIsSynced: (synced) => set({ isSynced: synced }),
+
+      isArchivedProjectsOpen: false,
+      setArchivedProjectsOpen: (open) => set({ isArchivedProjectsOpen: open }),
+
+      selectedTaskId: null,
+      setSelectedTaskId: (id) => set({ selectedTaskId: id }),
+      editingTaskId: null,
+      setEditingTaskId: (id) => set({ editingTaskId: id }),
+
+      isDesktop: true, // Avoids mobile layout flash during hydration
+      setIsDesktop: (isDesktop) => set({ isDesktop }),
+
+
+      lastUndoAction: null,
+      setLastUndoAction: (action) => set({ lastUndoAction: action }),
+      triggerLastUndoAction: () => {
+        const action = get().lastUndoAction;
+        if (action) {
+          set({ lastUndoAction: null });
+          return action();
+        }
+      },
+
+      yankedTaskId: null,
+      setYankedTaskId: (id) => set({ yankedTaskId: id }),
+
+      startHereStates: {},
+      setStartHereState: (userId, state) => {
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem(`startHere:${userId}`, JSON.stringify(state));
+          }
+        } catch {
+          // Component state still holds for this page view.
+        }
+        set((prev) => ({
+          startHereStates: {
+            ...prev.startHereStates,
+            [userId]: state,
+          },
+        }));
+      },
+
+      _hasHydrated: false,
+      setHasHydrated: (state) => set({ _hasHydrated: state }),
+    }),
+    {
+      name: "kanso-ui-state",
+      // Zustand only calls migrate() when this differs from the stored version.
+      version: 1,
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+      partialize: (state) => {
+        const {
+          isDesktop: _isDesktop,
+          setIsDesktop: _setIsDesktop,
+          _hasHydrated: _hasHydrated,
+          setHasHydrated: _setHasHydrated,
+          isFullscreen: _isFullscreen,
+          setIsFullscreen: _setIsFullscreen,
+          isSynced: _isSynced,
+          setIsSynced: _setIsSynced,
+          customSortEnteredViaDrag: _customSortEnteredViaDrag,
+          setCustomSortEnteredViaDrag: _setCustomSortEnteredViaDrag,
+          lastUndoAction: _lastUndoAction,
+          setLastUndoAction: _setLastUndoAction,
+          triggerLastUndoAction: _triggerLastUndoAction,
+          yankedTaskId: _yankedTaskId,
+          setYankedTaskId: _setYankedTaskId,
+          isShortcutsHelpOpen: _isShortcutsHelpOpen,
+          setShortcutsHelpOpen: _setShortcutsHelpOpen,
+          isArchivedProjectsOpen: _isArchivedProjectsOpen,
+          setArchivedProjectsOpen: _setArchivedProjectsOpen,
+          shortcutMouseCounts: _shortcutMouseCounts,
+          ...rest
+        } = state;
+        return rest;
+      },
+      migrate: (persistedState: unknown, _version: number) => {
+        const state = persistedState as Record<string, unknown> | undefined;
+        // "split" and "grid" were retired in favor of "list".
+        if (RETIRED_VIEW_MODES.has(state?.viewMode as string)) {
+          return { ...state, viewMode: "list" };
+        }
+        return state;
+      },
+      // Dialog state is reset on reload so overlays never reopen unexpectedly.
+      merge: (persisted, current) => {
+        const {
+          isShortcutsHelpOpen: _isShortcutsHelpOpen,
+          isArchivedProjectsOpen: _isArchivedProjectsOpen,
+          ...rest
+        } = (persisted ?? {}) as Partial<UiState>;
+        return { ...current, ...rest };
+      },
+    },
+  ),
+);

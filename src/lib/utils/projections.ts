@@ -1,0 +1,128 @@
+import {
+  startOfMonth,
+  endOfMonth,
+  differenceInCalendarDays,
+  format,
+} from "date-fns";
+import type { Habit, HabitEntry } from "@/lib/types/habit";
+import { getCurrentStreak } from "@/lib/utils/habit-streak";
+import { frequencyWindowDays } from "@/lib/utils/habit-frequency";
+
+type RiskCandidateHabit = Pick<
+  Habit,
+  | "id"
+  | "name"
+  | "color"
+  | "archived_at"
+  | "habit_type"
+  | "frequency_count"
+  | "frequency_days"
+  | "frequency_period"
+  | "target_type"
+  | "target_value"
+> & { entries: HabitEntry[] };
+
+const PACE_WINDOW_DAYS = 7;
+
+export interface PaceProjection {
+  soFar: number;
+  projected: number;
+  pacePerDay: number;
+  daysElapsed: number;
+  daysRemaining: number;
+  daysInMonth: number;
+}
+
+// Projects daily metric to month end using trailing PACE_WINDOW_DAYS average.
+function projectMetricThisMonth<T extends { date: string }>(
+  dailyTrend: T[],
+  getValue: (day: T) => number,
+  now: Date,
+): PaceProjection {
+  const monthStart = startOfMonth(now);
+  const monthEnd = endOfMonth(now);
+  const monthStartKey = format(monthStart, "yyyy-MM-dd");
+  const todayKey = format(now, "yyyy-MM-dd");
+
+  const soFar = dailyTrend
+    .filter((d) => d.date >= monthStartKey && d.date <= todayKey)
+    .reduce((sum, d) => sum + getValue(d), 0);
+
+  const recentDays = dailyTrend
+    .filter((d) => d.date <= todayKey)
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .slice(0, PACE_WINDOW_DAYS);
+  const pacePerDay =
+    recentDays.length > 0
+      ? recentDays.reduce((sum, d) => sum + getValue(d), 0) / recentDays.length
+      : 0;
+
+  const daysElapsed = differenceInCalendarDays(now, monthStart) + 1;
+  const daysInMonth = differenceInCalendarDays(monthEnd, monthStart) + 1;
+  const daysRemaining = daysInMonth - daysElapsed;
+
+  return {
+    soFar,
+    projected: soFar + pacePerDay * daysRemaining,
+    pacePerDay,
+    daysElapsed,
+    daysRemaining,
+    daysInMonth,
+  };
+}
+
+export function projectTasksThisMonth(
+  dailyTrend: { date: string; tasksCompleted: number }[],
+  now: Date = new Date(),
+): PaceProjection {
+  return projectMetricThisMonth(dailyTrend, (d) => d.tasksCompleted, now);
+}
+
+export function projectFocusHoursThisMonth(
+  dailyTrend: { date: string; hours: number }[],
+  now: Date = new Date(),
+): PaceProjection {
+  return projectMetricThisMonth(dailyTrend, (d) => d.hours, now);
+}
+
+export interface StreakAtRisk {
+  habitId: string;
+  name: string | null;
+  color: string;
+  currentStreak: number;
+}
+
+function isDailyFrequency(habit: RiskCandidateHabit): boolean {
+  const count = habit.frequency_count ?? 1;
+  return count === 1 && frequencyWindowDays(habit) === 1;
+}
+
+// Non-daily schedules are excluded: interval interpolation leaves no reliable "at risk" state.
+export function getStreaksAtRisk(
+  habits: RiskCandidateHabit[],
+  now: Date = new Date(),
+): StreakAtRisk[] {
+  const todayKey = format(now, "yyyy-MM-dd");
+
+  const risks: StreakAtRisk[] = [];
+  for (const habit of habits) {
+    if (habit.archived_at || habit.habit_type === "measurable") continue;
+    if (!isDailyFrequency(habit)) continue;
+
+    const streak = getCurrentStreak(habit, habit.entries, now);
+    if (streak <= 0) continue;
+
+    const doneToday = habit.entries.some(
+      (e) => e.date === todayKey && e.value >= 1,
+    );
+    if (doneToday) continue;
+
+    risks.push({
+      habitId: habit.id,
+      name: habit.name,
+      color: habit.color,
+      currentStreak: streak,
+    });
+  }
+  return risks;
+}

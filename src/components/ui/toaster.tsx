@@ -1,0 +1,96 @@
+"use client";
+
+import { Toaster as SonnerToaster } from "sonner";
+import { Inter } from "next/font/google";
+import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useUiStore } from "@/lib/store/uiStore";
+import { NOTIFICATION_LINK_BUTTON_CLASS } from "@/components/ui/notification-link-button";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+export function Toaster() {
+  const isDesktop = useUiStore((state) => state.isDesktop);
+
+  const desktopOffset = {
+    bottom:
+      "calc(1.5rem + max(var(--floating-timer-offset, 0px), calc(var(--offline-pill-offset, 0px) + var(--telemetry-prompt-offset, 0px))))",
+  };
+
+  const mobileOffset = {
+    left: 16,
+    right: 16,
+    bottom:
+      "calc(var(--mobile-nav-height) + 0.75rem + max(3.75rem, var(--telemetry-prompt-offset, 0px), var(--floating-timer-offset, 0px)))",
+  };
+
+  const position = isDesktop ? "bottom-right" : "bottom-center";
+  const offset = isDesktop ? desktopOffset : mobileOffset;
+
+  return (
+    <SonnerToaster
+      position={position}
+      expand={false}
+      visibleToasts={isDesktop ? 3 : 2}
+      closeButton={isDesktop}
+      duration={4000}
+      style={{ zIndex: "var(--z-toast)" }}
+      offset={offset}
+      mobileOffset={offset}
+      swipeDirections={["left", "right", "bottom"]}
+      icons={{
+        close: <X className="h-3.5 w-3.5" strokeWidth={2.25} />,
+      }}
+      toastOptions={{
+        unstyled: true,
+        style: {
+          width: "max-content",
+          maxWidth: "min(34rem, calc(100vw - 2rem))",
+        },
+        classNames: {
+          toast: cn(
+            inter.variable,
+            "font-sans",
+            "select-none cursor-default",
+            "bg-card border border-border/80 text-foreground",
+            "rounded-md shadow-sm inline-flex items-center gap-3",
+            "py-2.5 px-4 sm:py-3 sm:px-5",
+            "w-fit",
+            "transition-all duration-300 ease-seijaku",
+            "[&_[data-icon]]:text-foreground/60",
+          ),
+          // unstyled drops Sonner's spinner anchor; its unlayered CSS needs ! to override.
+          icon: "shrink-0 [&>svg]:w-5 [&>svg]:h-5 [&>.sonner-loading-wrapper]:relative!",
+          content: "min-w-0 flex-1",
+          title:
+            "font-semibold text-[13px] sm:text-sm tracking-tight leading-tight",
+          description:
+            "text-[12px] sm:text-sm text-muted-foreground leading-normal",
+          error: cn(
+            "[&_[data-icon]]:text-destructive",
+            "select-text cursor-auto",
+          ),
+          actionButton: cn(
+            NOTIFICATION_LINK_BUTTON_CLASS,
+            "text-brand ml-auto sm:ml-0",
+          ),
+          cancelButton: cn(
+            NOTIFICATION_LINK_BUTTON_CLASS,
+            "text-muted-foreground ml-auto sm:ml-0",
+          ),
+          closeButton: cn(
+            "order-last shrink-0",
+            "flex size-6 items-center justify-center rounded-md",
+            "cursor-pointer text-muted-foreground/80 hover:bg-muted/60 hover:text-foreground",
+            "transition-seijaku-fast",
+            "focus:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+          ),
+        },
+      }}
+    />
+  );
+}

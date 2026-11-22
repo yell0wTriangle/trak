@@ -1,0 +1,160 @@
+"use client";
+import React from "react";
+
+import {
+  MoreVertical,
+  Timer,
+  CheckCircle2,
+  Search,
+  Settings as SettingsIcon,
+} from "lucide-react";
+import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useRouter, usePathname } from "next/navigation";
+import { useTimer } from "@/components/TimerProvider";
+import { useCompletedTasks } from "@/components/CompletedTasksProvider";
+import { useActiveTask } from "@/lib/hooks/useActiveTask";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { useShortcutTips } from "@/lib/hooks/useShortcutTips";
+import { SyncIndicator } from "@/components/ui/SyncIndicator";
+import { ReadableText } from "@/components/encryption/ReadableText";
+
+const HeaderTimer = React.memo(function HeaderTimer() {
+  const { state } = useTimer();
+  const { trigger } = useHaptic();
+  const router = useRouter();
+  const { data: activeTask } = useActiveTask(state.activeTaskId);
+
+  const minutes = Math.floor(state.remainingSeconds / 60);
+  const seconds = state.remainingSeconds % 60;
+  const displayTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+
+  return (
+    <button
+      onPointerDown={() => trigger("toggle")}
+      onClick={() => {
+        router.push("/focus");
+      }}
+      className="flex items-center gap-2 px-3 py-2 min-h-[40px] rounded-lg bg-transparent hover:bg-accent/40 active:scale-95 transition-all outline-none min-w-0"
+    >
+      <Timer
+        strokeWidth={2.25}
+        className={`h-5 w-5 shrink-0 ${
+          state.isRunning
+            ? "text-primary animate-pulse motion-reduce:animate-none"
+            : "text-muted-foreground"
+        }`}
+      />
+      <div className="flex flex-col items-start text-left min-w-0">
+        <span
+          className={`text-base font-mono font-semibold tabular-nums leading-none ${
+            state.isRunning ? "text-primary" : "text-muted-foreground"
+          }`}
+        >
+          {displayTime}
+        </span>
+        {activeTask && (
+          <span className="text-xs text-muted-foreground truncate max-w-full">
+            <ReadableText text={activeTask.content} />
+          </span>
+        )}
+      </div>
+    </button>
+  );
+});
+
+interface HeaderProps {
+  setCommandOpen: (open: boolean) => void;
+}
+
+export const Header = React.memo(function Header({
+  setCommandOpen,
+}: HeaderProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { openSheet } = useCompletedTasks();
+  const { trigger } = useHaptic();
+  const { recordMouseAction } = useShortcutTips();
+  const isTasksPage = pathname === "/";
+
+  return (
+    <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between h-[var(--mobile-header-height)] px-4 pt-[env(safe-area-inset-top,0px)] border-b bg-sidebar md:hidden">
+      <div className="flex items-center gap-1.5 shrink-0">
+        <SidebarTrigger className="h-9 w-9 active:scale-95 transition-all [&_svg]:stroke-[2.25px]" />
+      </div>
+
+      {/* Right: Focus Timer (flexible) + Sync indicator + More Menu */}
+      <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+        {/* Isolated Timer Component to prevent Header re-renders */}
+        <HeaderTimer />
+
+        <div className="flex items-center gap-2 shrink-0">
+          <SyncIndicator />
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 bg-transparent hover:bg-accent/40 active:scale-95 transition-all"
+                onPointerDown={() => trigger("toggle")}
+              >
+                <MoreVertical className="h-5 w-5" strokeWidth={2.25} />
+                <span className="sr-only">More options</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => {
+                  trigger("toggle");
+                  setCommandOpen(true);
+                }}
+              >
+                <Search
+                  className="h-4 w-4 mr-2 text-foreground/70"
+                  strokeWidth={2.25}
+                />
+                Search
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {isTasksPage && (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      trigger("toggle");
+                      recordMouseAction("logbook");
+                      openSheet();
+                    }}
+                  >
+                    <CheckCircle2
+                      className="h-4 w-4 mr-2 text-foreground/70"
+                      strokeWidth={2.25}
+                    />
+                    Completed Tasks
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem
+                onClick={() => {
+                  trigger("toggle");
+                  router.push("/settings");
+                }}
+              >
+                <SettingsIcon className="h-4 w-4 mr-2" strokeWidth={2.25} />
+                Settings
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </header>
+  );
+});

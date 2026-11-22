@@ -1,0 +1,114 @@
+import {
+  render,
+  screen,
+  fireEvent,
+  act,
+  renderHook,
+} from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import {
+  HabitActionsProvider,
+  useHabitActions,
+} from "@/components/habits/HabitActionsProvider";
+import type { Habit } from "@/lib/types/habit";
+
+const mockRecordMouseAction = vi.fn();
+vi.mock("@/lib/hooks/useShortcutTips", () => ({
+  useShortcutTips: () => ({
+    recordMouseAction: mockRecordMouseAction,
+    recordKeyAction: vi.fn(),
+  }),
+}));
+
+const mockHabit = { id: "1", name: "Exercise" } as unknown as Habit;
+
+function Probe() {
+  const {
+    isHabitSheetOpen,
+    editingHabit,
+    initialTab,
+    openHabitInsights,
+    openEditHabit,
+    openAddHabit,
+  } = useHabitActions();
+  return (
+    <div>
+      <span data-testid="open">{String(isHabitSheetOpen)}</span>
+      <span data-testid="tab">{initialTab}</span>
+      <span data-testid="habit">{editingHabit?.name ?? "none"}</span>
+      <button onClick={() => openHabitInsights(mockHabit)}>insights</button>
+      <button onClick={() => openEditHabit(mockHabit)}>edit</button>
+      <button onClick={() => openAddHabit()}>add</button>
+    </div>
+  );
+}
+
+describe("HabitActionsProvider — openHabitInsights", () => {
+  it("opens the sheet on the Insights tab for the given habit", () => {
+    render(
+      <HabitActionsProvider>
+        <Probe />
+      </HabitActionsProvider>,
+    );
+
+    fireEvent.click(screen.getByText("insights"));
+
+    expect(screen.getByTestId("open")).toHaveTextContent("true");
+    expect(screen.getByTestId("tab")).toHaveTextContent("insights");
+    expect(screen.getByTestId("habit")).toHaveTextContent("Exercise");
+  });
+
+  it("resets to the Edit tab via openEditHabit", () => {
+    render(
+      <HabitActionsProvider>
+        <Probe />
+      </HabitActionsProvider>,
+    );
+
+    fireEvent.click(screen.getByText("insights"));
+    fireEvent.click(screen.getByText("edit"));
+
+    expect(screen.getByTestId("tab")).toHaveTextContent("edit");
+  });
+
+  it("resets to the Edit tab via openAddHabit", () => {
+    render(
+      <HabitActionsProvider>
+        <Probe />
+      </HabitActionsProvider>,
+    );
+
+    fireEvent.click(screen.getByText("insights"));
+    fireEvent.click(screen.getByText("add"));
+
+    expect(screen.getByTestId("tab")).toHaveTextContent("edit");
+  });
+
+  it("records mouse action for newHabit when openAddHabit is called without keyboard source", () => {
+    mockRecordMouseAction.mockClear();
+    render(
+      <HabitActionsProvider>
+        <Probe />
+      </HabitActionsProvider>,
+    );
+
+    fireEvent.click(screen.getByText("add"));
+
+    expect(mockRecordMouseAction).toHaveBeenCalledWith("newHabit");
+  });
+
+  it("does not record mouse action when openAddHabit is called with keyboard source", () => {
+    mockRecordMouseAction.mockClear();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <HabitActionsProvider>{children}</HabitActionsProvider>
+    );
+
+    const { result } = renderHook(() => useHabitActions(), { wrapper });
+
+    act(() => {
+      result.current.openAddHabit({ source: "keyboard" });
+    });
+
+    expect(mockRecordMouseAction).not.toHaveBeenCalled();
+  });
+});

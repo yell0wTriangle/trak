@@ -1,0 +1,139 @@
+"use client";
+
+import { QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { useState, useEffect } from "react";
+import { recordDiagnosticError } from "@/lib/errors/diagnostics";
+import { createClient } from "@/lib/supabase/client";
+import { taskMutations } from "@/lib/mutations/task";
+import { habitMutations } from "@/lib/mutations/habit";
+import { projectMutations } from "@/lib/mutations/project";
+import { focusMutations } from "@/lib/mutations/focus";
+import { asyncStoragePersister } from "@/lib/query-cache-purge";
+import { purgeDeviceContent } from "@/lib/crypto/purge";
+import { HABIT_ENTRY_UPDATED } from "@/lib/habit-links";
+import {
+  isContentKeyUnavailableError,
+  onServerKeySignal,
+} from "@/lib/supabase/wrapClient";
+import { handleServerKeySignal } from "@/lib/utils/mutation-error";
+import { TASKS_UPDATED } from "@/lib/sw/notificationClickHandler";
+
+export default function QueryProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [queryClient] = useState(() => {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: 1000 * 60 * 5,
+          gcTime: 1000 * 60 * 60 * 24 * 7,
+          retry: 2,
+          refetchOnWindowFocus: true,
+          networkMode: "offlineFirst",
+        },
+        mutations: {
+          // A purge does not stop a pending retry, which would reseal a discarded change after unlock.
+          retry: (failureCount, error) =>
+            failureCount < 1 && !isContentKeyUnavailableError(error),
+        },
+      },
+    });
+
+    client.setMutationDefaults(["createTask"], {
+      mutationFn: taskMutations.create,
+    });
+    client.setMutationDefaults(["toggleTask"], {
+      mutationFn: taskMutations.toggle,
+    });
+    client.setMutationDefaults(["updateTask"], {
+      mutationFn: taskMutations.update,
+    });
+    client.setMutationDefaults(["deleteTask"], {
+      mutationFn: taskMutations.delete,
+    });
+    client.setMutationDefaults(["reorderTasks"], {
+      mutationFn: taskMutations.reorder,
+    });
+    client.setMutationDefaults(["clearCompletedTasks"], {
+      mutationFn: taskMutations.clearCompleted,
+    });
+
+    client.setMutationDefaults(["createHabit"], {
+      mutationFn: habitMutations.create,
+    });
+    client.setMutationDefaults(["updateHabit"], {
+      mutationFn: habitMutations.update,
+    });
+    client.setMutationDefaults(["deleteHabit"], {
+      mutationFn: habitMutations.delete,
+    });
+    client.setMutationDefaults(["markHabitComplete"], {
+      mutationFn: habitMutations.markComplete,
+    });
+
+    client.setMutationDefaults(["createProject"], {
+      mutationFn: projectMutations.create,
+    });
+    client.setMutationDefaults(["updateProject"], {
+      mutationFn: projectMutations.update,
+    });
+    client.setMutationDefaults(["archiveProject"], {
+      mutationFn: projectMutations.archive,
+    });
+
+    client.setMutationDefaults(["logFocusSession"], {
+      mutationFn: focusMutations.logSession,
+    });
+
+    return client;
+  });
+
+  useEffect(() => onServerKeySignal(handleServerKeySignal), []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+    const handler = (event: MessageEvent) => {
+      const type = (event.data as { type?: string } | null)?.type;
+      if (type === HABIT_ENTRY_UPDATED) {
+        queryClient.invalidateQueries({ queryKey: ["habits"] });
+      } else if (type === TASKS_UPDATED) {
+        queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () =>
+      navigator.serviceWorker.removeEventListener("message", handler);
+  }, [queryClient]);
+
+  return (
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      }}
+      onSuccess={() => {
+        const supabase = createClient();
+        const isGuest =
+          typeof window !== "undefined" &&
+          localStorage.getItem("kanso_guest_mode") === "true";
+
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          const user = session?.user;
+          if (user || isGuest) {
+            queryClient.resumePausedMutations();
+          } else {
+            purgeDeviceContent(queryClient).catch((err) =>
+              recordDiagnosticError(err),
+            );
+          }
+        });
+      }}
+    >
+      {children}
+    </PersistQueryClientProvider>
+  );
+}

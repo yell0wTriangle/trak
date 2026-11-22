@@ -1,0 +1,166 @@
+"use client";
+
+import React, { memo, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { AnimatePresence } from "motion/react";
+import * as m from "motion/react-m";
+import { Play, Pause, X, Maximize2 } from "lucide-react";
+import { AnimatedCountdown } from "@/components/ui/animated-countdown";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { useMeasuredOffset } from "@/lib/hooks/useMeasuredOffset";
+import { usePrefersReducedMotion } from "@/lib/hooks/usePrefersReducedMotion";
+import { useUiStore } from "@/lib/store/uiStore";
+import { useTimerStore } from "@/lib/store/timerStore";
+import { useTimer } from "@/components/TimerProvider";
+import { SEIJAKU_SPRING } from "@/lib/motion";
+
+export const FloatingTimer = memo(function FloatingTimer() {
+  const mode = useTimerStore((s) => s.state.mode);
+  const isRunning = useTimerStore((s) => s.state.isRunning);
+  const remainingSeconds = useTimerStore((s) => s.state.remainingSeconds);
+  const completedSessions = useTimerStore((s) => s.state.completedSessions);
+  const totalSeconds = useTimerStore((s) => {
+    const settings = s.settings;
+    switch (s.state.mode) {
+      case "focus":
+        return (settings?.focusDuration ?? 25) * 60;
+      case "shortBreak":
+        return (settings?.shortBreakDuration ?? 5) * 60;
+      case "longBreak":
+        return (settings?.longBreakDuration ?? 15) * 60;
+      default:
+        return 25 * 60;
+    }
+  });
+  // useTimer(), not useTimerActions(): needs `start`, which isn't in the
+  // stable actions-only slice.
+  const { start, pause } = useTimer();
+
+  const pathname = usePathname();
+  const router = useRouter();
+  const { trigger } = useHaptic();
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  const isPipActive = useUiStore((state) => state.isPipActive);
+  const isDesktop = useUiStore((state) => state.isDesktop);
+
+  const [isDismissed, setIsDismissed] = useState(false);
+
+  useEffect(() => {
+    if (isRunning || pathname === "/focus") {
+      setIsDismissed(false);
+    }
+  }, [isRunning, pathname]);
+
+  const isSessionActive = isRunning || remainingSeconds < totalSeconds;
+
+  const shouldShow =
+    isSessionActive &&
+    !isDismissed &&
+    pathname !== "/focus" &&
+    isDesktop &&
+    !isPipActive;
+
+  const timerRef = useRef<HTMLDivElement>(null);
+
+  // Toasts stack above the timer on desktop (Toaster's offset formula).
+  useMeasuredOffset(timerRef, shouldShow, "--floating-timer-offset");
+
+  const handlePlayPause = () => {
+    trigger("toggle");
+    if (isRunning) {
+      pause();
+    } else {
+      start();
+    }
+  };
+
+  const handleMaximize = () => {
+    trigger("tick");
+    router.push("/focus");
+  };
+
+  const handleClose = () => {
+    trigger("thud");
+    pause();
+    setIsDismissed(true);
+  };
+
+  return (
+    <AnimatePresence>
+      {shouldShow && (
+        <m.div
+          ref={timerRef}
+          data-testid="floating-timer"
+          initial={
+            prefersReducedMotion
+              ? { opacity: 0 }
+              : { opacity: 0, y: 100, scale: 0.8 }
+          }
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={
+            prefersReducedMotion
+              ? { opacity: 0 }
+              : { opacity: 0, y: 100, scale: 0.8 }
+          }
+          transition={prefersReducedMotion ? { duration: 0 } : SEIJAKU_SPRING}
+          className="fixed bottom-20 right-4 md:bottom-6 md:right-6 z-[var(--z-floating)] bg-card border border-border rounded-xl shadow-sm p-4 min-w-[200px] select-none"
+          style={{ touchAction: "none" }}
+        >
+          <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground mb-1 text-center">
+            {mode === "focus"
+              ? "Focus"
+              : mode === "shortBreak"
+                ? "Short Break"
+                : "Long Break"}
+          </div>
+
+          <div className="text-3xl font-light font-mono tracking-tight text-foreground tabular-nums text-center mb-3">
+            <AnimatedCountdown seconds={remainingSeconds} />
+          </div>
+
+          <div className="flex items-center justify-center gap-2">
+            <button
+              onClick={handlePlayPause}
+              aria-label={isRunning ? "Pause timer" : "Start timer"}
+              className="h-10 w-10 rounded-full bg-brand text-brand-foreground flex items-center justify-center hover:shadow-brand/20 active:scale-95 transition-all shadow-xs"
+            >
+              {isRunning ? (
+                <Pause className="h-4 w-4 fill-current" strokeWidth={2.25} />
+              ) : (
+                <Play
+                  className="h-4 w-4 ml-0.5 fill-current"
+                  strokeWidth={2.25}
+                />
+              )}
+            </button>
+
+            <button
+              onClick={handleMaximize}
+              aria-label="Maximize timer"
+              className="h-8 w-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center hover:bg-secondary/80 active:scale-95 transition-all"
+            >
+              <Maximize2 className="h-3.5 w-3.5" strokeWidth={2.25} />
+            </button>
+
+            <button
+              onClick={handleClose}
+              aria-label="Close timer"
+              className="h-8 w-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center hover:bg-secondary/80 active:scale-95 transition-all"
+            >
+              <X className="h-3.5 w-3.5" strokeWidth={2.25} />
+            </button>
+          </div>
+
+          <div className="text-[10px] text-muted-foreground mt-2 text-center">
+            {mode === "focus"
+              ? `Session ${completedSessions + 1}`
+              : mode === "longBreak"
+                ? "Cycle Complete"
+                : `Break after Session ${completedSessions}`}
+          </div>
+        </m.div>
+      )}
+    </AnimatePresence>
+  );
+});

@@ -1,0 +1,200 @@
+"use client";
+
+import { useHotkeys } from "react-hotkeys-hook";
+import { useRouter, usePathname } from "next/navigation";
+import { useTheme } from "next-themes";
+import { useTaskActions } from "@/components/TaskActionsProvider";
+import { useCompletedTasks } from "@/components/CompletedTasksProvider";
+import { useHabitActions } from "@/components/habits/HabitActionsProvider";
+import { useProjectActions } from "@/components/ProjectActionsProvider";
+import { useUiStore } from "@/lib/store/uiStore";
+import { useCalendarStore } from "@/lib/calendar/store";
+import { useIsAnyModalOpen } from "@/lib/hooks/useIsAnyModalOpen";
+import { useIsBoardViewOnTasks } from "@/lib/hooks/useIsBoardViewOnTasks";
+import { useIsTasksPage } from "@/lib/hooks/useIsTasksPage";
+import { useShortcutTips } from "@/lib/hooks/useShortcutTips";
+
+interface GlobalHotkeysProps {
+  setCommandOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
+  setHelpOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
+  commandOpen?: boolean;
+}
+
+export function GlobalHotkeys({
+  setCommandOpen,
+  setHelpOpen,
+  commandOpen,
+}: GlobalHotkeysProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { setTheme, resolvedTheme } = useTheme();
+  const { openAddTask } = useTaskActions();
+  const { openSheet: openCompletedSheet } = useCompletedTasks();
+  const { openAddHabit } = useHabitActions();
+  const { openCreateProject } = useProjectActions();
+  const { openCreateEvent } = useCalendarStore();
+  const setViewMode = useUiStore((state) => state.setViewMode);
+  const setArchivedProjectsOpen = useUiStore(
+    (state) => state.setArchivedProjectsOpen,
+  );
+  const { recordKeyAction } = useShortcutTips();
+
+  const isOtherModalOpen = useIsAnyModalOpen();
+  const isAnyModalOpen = isOtherModalOpen || !!commandOpen;
+
+  const options = {
+    preventDefault: true,
+    enableOnFormTags: false,
+    enabled: !isAnyModalOpen,
+  };
+
+  const isBoardViewOnTasks = useIsBoardViewOnTasks();
+  const habitHotkeyOptions = {
+    ...options,
+    enabled: !isAnyModalOpen && !isBoardViewOnTasks,
+  };
+
+  // TaskList binds its own "p" for pasting a yanked task, scoped to whenever
+  // it's mounted (the tasks page). Both listeners fire on the same keydown,
+  // so New Project only steps aside there — never app-wide, and never past
+  // a route change, unlike a check against the yankedTaskId store flag alone.
+  const isTasksPage = useIsTasksPage();
+  const yankedTaskId = useUiStore((state) => state.yankedTaskId);
+  const newProjectHotkeyOptions = {
+    ...options,
+    enabled: !isAnyModalOpen && !(isTasksPage && !!yankedTaskId),
+  };
+
+  // --- ACTIONS ---
+
+  // New Task (n)
+  useHotkeys(
+    "n",
+    () => {
+      recordKeyAction("newTask");
+      openAddTask({ source: "keyboard" });
+    },
+    options,
+  );
+
+  // New Habit (h)
+  useHotkeys(
+    "h",
+    () => {
+      recordKeyAction("newHabit");
+      openAddHabit({ source: "keyboard" });
+    },
+    habitHotkeyOptions,
+  );
+
+  // New Event (e)
+  useHotkeys(
+    "e",
+    () => {
+      recordKeyAction("newEvent");
+      openCreateEvent();
+    },
+    options,
+  );
+
+  // New Project (p)
+  useHotkeys(
+    "p",
+    () => {
+      recordKeyAction("newProject");
+      openCreateProject({ source: "keyboard" });
+    },
+    newProjectHotkeyOptions,
+  );
+
+  // Archived Projects (a)
+  useHotkeys("a", () => setArchivedProjectsOpen(true), options);
+
+  // Toggle Logbook (c)
+  useHotkeys(
+    "c",
+    () => {
+      recordKeyAction("logbook");
+      openCompletedSheet();
+    },
+    options,
+  );
+
+  useHotkeys(
+    ["mod+k"],
+    (event) => {
+      if (event.repeat) return;
+      setCommandOpen((prev) => !prev);
+    },
+    { ...options, enabled: !isOtherModalOpen },
+  );
+
+  // Theme Cycle (t)
+  useHotkeys(
+    "t",
+    (event) => {
+      if (event.repeat) return;
+      const nextTheme = resolvedTheme === "dark" ? "light" : "dark";
+      setTheme(nextTheme);
+    },
+    options,
+  );
+
+  const toggleHelp = (event: KeyboardEvent) => {
+    if (event.repeat) return;
+    setHelpOpen((prev) => !prev);
+  };
+
+  // Shortcuts Help (Shift+H)
+  useHotkeys("shift+h", toggleHelp, options);
+
+  // "?" sits on a different physical key per layout, so match the produced
+  // character; by default the hook matches event.code, where "?" never fires.
+  // Match both shifted and unshifted ? so layouts without Shift (or AltGr) work.
+  useHotkeys(["?", "shift+?"], toggleHelp, { ...options, useKey: true });
+
+  // Focus Mode (f)
+  useHotkeys("f", () => router.push("/focus"), options);
+
+  // View Switching Shortcuts (Shift + 1/2)
+  useHotkeys(
+    "shift+1",
+    () => {
+      setViewMode("list");
+      if (pathname !== "/") router.push("/");
+    },
+    options,
+  );
+
+  useHotkeys(
+    "shift+2",
+    () => {
+      setViewMode("board");
+      if (pathname !== "/") router.push("/");
+    },
+    options,
+  );
+
+  // Escape to close Focus Mode (if on focus page) and other sheets
+  useHotkeys(
+    "esc",
+    (event) => {
+      if (window.location.pathname === "/focus") {
+        event.preventDefault();
+        router.push("/");
+      }
+    },
+    { enableOnFormTags: true },
+  );
+
+  // --- NAVIGATION (g + 1-6, or just 1-6?) ---
+  // Using 1-6 for quick tab switching is standard
+  useHotkeys("1", () => router.push("/"), options); // Home/Tasks
+  useHotkeys("2", () => router.push("/habits"), options); // Habits
+  useHotkeys("3", () => router.push("/calendar"), options); // Calendar
+  useHotkeys("4", () => router.push("/stats"), options); // Statistics
+  useHotkeys("5", () => router.push("/focus"), options); // Focus
+  useHotkeys("6", () => router.push("/settings"), options); // Settings
+
+  return null;
+}

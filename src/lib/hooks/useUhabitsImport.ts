@@ -1,0 +1,165 @@
+"use client";
+
+import { useState } from "react";
+import { recordDiagnosticError } from "@/lib/errors/diagnostics";
+import {
+  parseUhabitsFile,
+  partitionAgainstExisting,
+  type ImportedHabit,
+  toCreateHabitInput,
+  type UhabitsRawSource,
+} from "@/lib/import/uhabits";
+import { persistImportSource } from "@/lib/mutations/importSource";
+import {
+  classifyUhabitsError,
+  SAVE_ERROR_MESSAGE,
+} from "@/lib/import/uhabitsErrors";
+import type { HabitEntry } from "@/lib/types/habit";
+import { notify } from "@/lib/notify";
+import { useHaptic } from "@/lib/hooks/useHaptic";
+import { habitMutations } from "@/lib/mutations/habit";
+import { useQueryClient } from "@tanstack/react-query";
+import { createClient } from "@/lib/supabase/client";
+import { mockStore } from "@/lib/mock/mock-store";
+
+const ENTRY_CHUNK_SIZE = 500;
+
+export function useUhabitsImport() {
+  const [isImporting, setIsImporting] = useState(false);
+  const { trigger } = useHaptic();
+  const queryClient = useQueryClient();
+
+  const importUhabits = async (file: File) => {
+    if (!file) return;
+
+    setIsImporting(true);
+    trigger("toggle");
+    const loadingToastId = notify.loading(`Parsing ${file.name}...`);
+
+    const reportImportFailure = (err: unknown, message: string) => {
+      void recordDiagnosticError(err);
+      notify.error(message, { id: loadingToastId });
+      trigger("thud");
+      return false;
+    };
+
+    try {
+      let habits: ImportedHabit[];
+      let entries: HabitEntry[];
+      let source: UhabitsRawSource;
+      try {
+        ({ habits, entries, source } = await parseUhabitsFile(file));
+      } catch (err) {
+        return reportImportFailure(err, classifyUhabitsError(err));
+      }
+
+      if (habits.length === 0) {
+        notify.error("No compatible habits found in the database", {
+          id: loadingToastId,
+        });
+        return;
+      }
+
+      const isGuest =
+        typeof window !== "undefined" &&
+        localStorage.getItem("kanso_guest_mode") === "true";
+
+      void persistImportSource(
+        { source_app: "uhabits", file_name: file.name, raw: source },
+        { isGuest },
+      ).catch((err) => recordDiagnosticError(err));
+
+      let habitsToImport = habits;
+      let skippedNames: string[] = [];
+      let nextSortOrder = 0;
+      if (!isGuest) {
+        const supabase = createClient();
+        // eslint-disable-next-line local/no-unbounded-supabase-select -- habit definitions, not entries
+        const { data: existing } = await supabase
+          .from("habits")
+          .select("id, name, sort_order, source_uuid");
+        if (existing && existing.length > 0) {
+          ({ toImport: habitsToImport, skippedNames } =
+            partitionAgainstExisting(habits, existing));
+          nextSortOrder = Math.max(...existing.map((h) => h.sort_order)) + 1;
+        }
+      } else {
+        ({ toImport: habitsToImport, skippedNames } = partitionAgainstExisting(
+          habits,
+          mockStore.getHabits(),
+        ));
+      }
+
+      if (habitsToImport.length === 0) {
+        notify.info(
+          `All ${habits.length} habits already exist — nothing imported: ${skippedNames.join(", ")}`,
+          { id: loadingToastId },
+        );
+        return true;
+      }
+
+      notify.loading(`Importing ${habitsToImport.length} habits...`, {
+        id: loadingToastId,
+      });
+
+      const habitIdMap = new Map<string, string>();
+
+      for (const habit of habitsToImport) {
+        const created = await habitMutations.create({
+          ...toCreateHabitInput(habit),
+          sort_order: isGuest ? undefined : nextSortOrder++,
+        });
+        habitIdMap.set(habit.id, created.id);
+      }
+
+      if (entries.length > 0) {
+        notify.loading(
+          `Importing ${habits.length} habits and ${entries.length} history entries...`,
+          { id: loadingToastId },
+        );
+
+        const remapped = entries
+          .filter((e) => habitIdMap.has(e.habit_id))
+          .map((e) => ({
+            id: crypto.randomUUID(),
+            habit_id: habitIdMap.get(e.habit_id)!,
+            date: e.date,
+            value: e.value,
+            notes: e.notes ?? null,
+            created_at: e.created_at,
+          }));
+
+        if (isGuest) {
+          mockStore.addHabitEntries(remapped);
+        } else {
+          const supabase = createClient();
+          for (let i = 0; i < remapped.length; i += ENTRY_CHUNK_SIZE) {
+            const { error } = await supabase
+              .from("habit_entries")
+              .insert(remapped.slice(i, i + ENTRY_CHUNK_SIZE));
+            if (error) throw error;
+          }
+        }
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["habits"] });
+
+      const skippedMsg =
+        skippedNames.length > 0
+          ? `. Already existed, skipped: ${skippedNames.join(", ")}`
+          : "";
+      notify.success(
+        `Imported ${habitsToImport.length} habits with ${entries.length} history entries${skippedMsg}`,
+        { id: loadingToastId },
+      );
+      trigger("success");
+      return true;
+    } catch (err) {
+      return reportImportFailure(err, SAVE_ERROR_MESSAGE);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  return { importUhabits, isImporting };
+}

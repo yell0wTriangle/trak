@@ -1,0 +1,227 @@
+"use client";
+
+import {
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+  ResponsiveDialogDescription,
+} from "@/components/ui/responsive-dialog";
+import { Keyboard } from "lucide-react";
+import { getPlatformKey } from "@/lib/utils/platform";
+
+interface Shortcut {
+  // A nested array is a chord inside an "alt" row, e.g. ? / Shift+h.
+  keys: (string | string[])[];
+  description: string;
+  // How the keys combine. Omit for a chord (press together, e.g. ⌘+B).
+  // "alt": either key works (e.g. j/↓). "sequence": pressed one after another (e.g. g g).
+  keyRelation?: "alt" | "sequence";
+}
+
+interface ShortcutGroup {
+  title: string;
+  shortcuts: Shortcut[];
+}
+
+const keyConnector: Record<
+  NonNullable<Shortcut["keyRelation"]> | "chord",
+  string | null
+> = {
+  chord: "+",
+  alt: "/",
+  sequence: null,
+};
+
+const getShortcuts = (
+  platformKey: string,
+  isBoardViewOnTasks: boolean,
+): ShortcutGroup[] => [
+  {
+    title: "Navigation",
+    shortcuts: [
+      { keys: ["1"], description: "Go to Tasks" },
+      { keys: ["2"], description: "Go to Habits" },
+      { keys: ["3"], description: "Go to Calendar" },
+      { keys: ["4"], description: "Go to Stats" },
+      { keys: ["5"], description: "Go to Focus" },
+      { keys: ["6"], description: "Go to Settings" },
+      { keys: [platformKey, "b"], description: "Toggle Sidebar" },
+      { keys: ["Esc"], description: "Close Focus/Dialogs" },
+    ],
+  },
+  {
+    title: "Actions",
+    shortcuts: [
+      { keys: ["n"], description: "New Task" },
+      // h is claimed by board-view horizontal navigation on the tasks page,
+      // so New Habit doesn't bind there — see
+      // .scratch/vim-keyboard-navigation/issues/01-board-view-2d-navigation.md.
+      ...(isBoardViewOnTasks
+        ? []
+        : [{ keys: ["h"], description: "Create Habit" }]),
+      { keys: ["e"], description: "New Event" },
+      { keys: ["p"], description: "New Project" },
+      { keys: ["a"], description: "Archived Projects" },
+      { keys: ["c"], description: "Toggle Completed Tasks" },
+      { keys: [platformKey, "Enter"], description: "Save Task/Habit/Event" },
+      { keys: [platformKey, "K"], description: "Search / Command Menu" },
+      { keys: ["T"], description: "Switch Theme" },
+      { keys: ["f"], description: "Focus Mode" },
+      {
+        keys: ["?", ["Shift", "h"]],
+        description: "Show Shortcuts",
+        keyRelation: "alt",
+      },
+    ],
+  },
+  {
+    title: "View",
+    shortcuts: [
+      { keys: ["Shift", "1"], description: "List View" },
+      { keys: ["Shift", "2"], description: "Board View" },
+    ],
+  },
+  {
+    title: "Task List (Vim)",
+    shortcuts: [
+      { keys: ["j", "↓"], description: "Select Next Task", keyRelation: "alt" },
+      {
+        keys: ["k", "↑"],
+        description: "Select Previous Task",
+        keyRelation: "alt",
+      },
+      {
+        keys: ["h", "←"],
+        description: "Select Column Left (Board)",
+        keyRelation: "alt",
+      },
+      {
+        keys: ["l", "→"],
+        description: "Select Column Right (Board)",
+        keyRelation: "alt",
+      },
+      {
+        keys: ["g", "g"],
+        description: "Jump to First Task",
+        keyRelation: "sequence",
+      },
+      { keys: ["G"], description: "Jump to Last Task" },
+      {
+        keys: ["Enter", "o"],
+        description: "Open Selected",
+        keyRelation: "alt",
+      },
+      {
+        keys: ["Space", "x"],
+        description: "Toggle Completion",
+        keyRelation: "alt",
+      },
+      {
+        keys: ["d", "Backspace"],
+        description: "Delete Selected",
+        keyRelation: "alt",
+      },
+      { keys: ["u"], description: "Undo" },
+      {
+        keys: ["y", "y"],
+        description: "Yank Selected Task",
+        keyRelation: "sequence",
+      },
+      { keys: ["p"], description: "Paste Yanked Task" },
+      { keys: ["Esc"], description: "Clear Selection" },
+    ],
+  },
+];
+
+function KeyGroup({
+  keys,
+  relation,
+}: {
+  keys: Shortcut["keys"];
+  relation: keyof typeof keyConnector;
+}) {
+  return keys.map((key, i) => (
+    <div key={i} className="flex items-center gap-1.5">
+      {i > 0 && (
+        <span
+          aria-hidden="true"
+          className="text-[11px] font-normal tracking-[0.02em] text-muted-foreground"
+        >
+          {keyConnector[relation]}
+        </span>
+      )}
+      {Array.isArray(key) ? (
+        <KeyGroup keys={key} relation="chord" />
+      ) : (
+        <kbd className="pointer-events-none h-6.5 min-w-[28px] select-none items-center justify-center rounded border border-border bg-transparent px-2 font-mono text-[13px] tracking-[0.01em] text-foreground shadow-none flex">
+          {key}
+        </kbd>
+      )}
+    </div>
+  ));
+}
+
+interface ShortcutsHelpProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  isBoardViewOnTasks?: boolean;
+}
+
+export function ShortcutsHelp({
+  open,
+  onOpenChange,
+  isBoardViewOnTasks = false,
+}: ShortcutsHelpProps) {
+  const platformKey = getPlatformKey();
+  const shortcuts = getShortcuts(platformKey, isBoardViewOnTasks);
+
+  return (
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[720px] border-border/80 shadow-none p-0">
+        <ResponsiveDialogHeader className="p-6 pb-2 border-b border-border/80">
+          <ResponsiveDialogTitle className="flex items-center gap-2.5 text-[24px] font-semibold tracking-[-0.02em] text-foreground">
+            <Keyboard
+              className="h-5 w-5 text-muted-foreground/70"
+              strokeWidth={2.25}
+            />
+            Keyboard Shortcuts
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription className="text-[11px] uppercase tracking-[0.02em] text-muted-foreground font-medium pt-1">
+            Refine your workflow with Focus Meridian
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
+
+        <div className="max-h-[60vh] overflow-y-auto scrollbar-hide p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
+            {shortcuts.map((group) => (
+              <div key={group.title} className="space-y-4">
+                <h3 className="text-[18px] font-medium tracking-[-0.01em] text-foreground pb-2 border-b border-border/80">
+                  {group.title}
+                </h3>
+                <div className="space-y-3.5">
+                  {group.shortcuts.map((shortcut, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between gap-4 text-[15px] font-medium tracking-[0.01em]"
+                    >
+                      <span className="text-foreground/90 font-medium">
+                        {shortcut.description}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <KeyGroup
+                          keys={shortcut.keys}
+                          relation={shortcut.keyRelation ?? "chord"}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
+  );
+}
