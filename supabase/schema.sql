@@ -65,11 +65,15 @@ CREATE TABLE IF NOT EXISTS tasks (
   recurrence_settings JSONB,
   google_event_id TEXT,
   google_etag TEXT,
+  recurring_series_id UUID,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS tasks_user_id_idx ON public.tasks (user_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_recurring_series_id
+  ON public.tasks (recurring_series_id)
+  WHERE recurring_series_id IS NOT NULL;
 
 -- =============================================================================
 -- 4. LABELS TABLE (Tags)
@@ -947,6 +951,16 @@ CREATE TABLE IF NOT EXISTS public.habits (
   question TEXT,
   reminder_time TEXT,
   reminder_days INT NOT NULL DEFAULT 127,
+  habit_type TEXT NOT NULL DEFAULT 'boolean'
+    CHECK (habit_type IN ('boolean', 'measurable')),
+  frequency_count INT,
+  -- Kept for compatibility while frequency_days is the canonical N-in-D value.
+  frequency_period TEXT DEFAULT 'day'
+    CHECK (frequency_period IN ('day', 'week', 'month')),
+  target_type TEXT DEFAULT 'at_least'
+    CHECK (target_type IN ('at_least', 'at_most')),
+  target_value REAL,
+  unit TEXT,
   -- N-in-D window length; source of truth over frequency_period (ADR 0019).
   frequency_days INT CHECK (frequency_days BETWEEN 1 AND 365)
 );
@@ -1502,6 +1516,25 @@ CREATE POLICY "Users can update own calendar_events" ON public.calendar_events
 CREATE POLICY "Users can delete own calendar_events" ON public.calendar_events
   FOR DELETE USING (auth.uid() = user_id);
 
+-- OAuth refresh tokens are encrypted by the server and accessible only through
+-- the service-role client; authenticated clients have no table policies.
+CREATE TABLE IF NOT EXISTS public.calendar_oauth_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'outlook')),
+  encrypted_refresh_token TEXT NOT NULL,
+  token_iv TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  CONSTRAINT calendar_oauth_tokens_user_provider_unique UNIQUE (user_id, provider)
+);
+
+CREATE TRIGGER calendar_oauth_tokens_updated_at
+  BEFORE UPDATE ON public.calendar_oauth_tokens
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+ALTER TABLE public.calendar_oauth_tokens ENABLE ROW LEVEL SECURITY;
+
 -- =============================================================================
 -- 14. EXTERNAL_CALENDARS TABLE (Multi-Provider Sync Metadata)
 -- =============================================================================
@@ -1699,16 +1732,14 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Phase 1 (cleanup): unconditionally cancel every still-pending timer_end
-  -- row for this user. Safe because Phase 2 immediately rebuilds whatever
-  -- chain is still needed, and there is exactly one user_timer_state row per
-  -- user (enforced by user_timer_state_user_id_idx), so this is scoped
-  -- correctly by construction — no device-local ref required.
+  -- Cancel only future reminders. A completion write can arrive after the
+  -- deadline; leave its due row available for the queue worker to deliver.
   UPDATE public.notification_queue
   SET status = 'cancelled'
   WHERE user_id = NEW.user_id
     AND status = 'pending'
-    AND type = 'timer_end';
+    AND type = 'timer_end'
+    AND scheduled_at > now();
 
   -- Phase 2 (create): only project a chain for a running timer with a known
   -- deadline, and only if the user has timer alerts enabled.
@@ -2077,8 +2108,7 @@ SELECT cron.schedule(
 );
 
 -- pg_cron logs every job run to cron.job_run_details and never prunes it
--- itself (see pg_cron's own docs) — schedule a daily cleanup so it doesn't
--- grow unbounded alongside the telemetry retention jobs above.
+-- itself (see pg_cron's own docs), so schedule a daily cleanup.
 SELECT cron.unschedule(jobname)
 FROM cron.job
 WHERE jobname = 'cron-prune-job-run-details';

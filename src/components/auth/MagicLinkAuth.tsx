@@ -35,7 +35,7 @@ export function MagicLinkAuth({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !captchaToken) return;
+    if (!email || captchaMissing) return;
 
     setLoading(true);
     setError(null);
@@ -43,7 +43,7 @@ export function MagicLinkAuth({
     try {
       const { error: signInError } = await signInWithMagicLink(
         email,
-        captchaToken,
+        captchaToken ?? "",
       );
       if (signInError) {
         setError(signInError.message || "Failed to send magic link");

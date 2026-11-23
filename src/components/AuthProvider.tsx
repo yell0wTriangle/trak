@@ -195,7 +195,7 @@ export function AuthProvider({
         email,
         options: {
           emailRedirectTo: getCallbackUrl(),
-          captchaToken,
+          ...(captchaToken ? { captchaToken } : {}),
         },
       });
       return { error };
@@ -210,7 +210,7 @@ export function AuthProvider({
         password,
         options: {
           emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(EMAIL_CONFIRMED_PATH)}`,
-          captchaToken,
+          ...(captchaToken ? { captchaToken } : {}),
         },
       });
       return { error };
@@ -223,7 +223,7 @@ export function AuthProvider({
       const { error } = await supabase.auth.signInWithPassword({
         email,
         password,
-        options: { captchaToken },
+        options: captchaToken ? { captchaToken } : {},
       });
       return { error };
     },
@@ -235,7 +235,7 @@ export function AuthProvider({
       // Routes through the callback's existing `next` handling — no separate recovery-detection logic needed there.
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent("/auth/update-password")}`,
-        captchaToken,
+        ...(captchaToken ? { captchaToken } : {}),
       });
       return { error };
     },

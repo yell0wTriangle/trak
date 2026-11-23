@@ -58,7 +58,7 @@ export function PasswordAuth({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || passwordTooShort || !captchaToken) return;
+    if (!email || !password || passwordTooShort || captchaMissing) return;
 
     setLoading(true);
     setError(null);
@@ -66,8 +66,8 @@ export function PasswordAuth({
     try {
       const { error: authError } =
         mode === "sign-up"
-          ? await signUpWithPassword(email, password, captchaToken)
-          : await signInWithPassword(email, password, captchaToken);
+          ? await signUpWithPassword(email, password, captchaToken ?? "")
+          : await signInWithPassword(email, password, captchaToken ?? "");
 
       if (authError) {
         const message = authError.message || "Authentication failed";
